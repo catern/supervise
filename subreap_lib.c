@@ -31,10 +31,12 @@ FILE *get_children_stream(pid_t pid) {
     return fopen(buf, "re");
 }
 
-/* build a child tree, using the /proc/pid/task/tid/children file */
+/* Build a child tree, using the /proc/pid/task/tid/children
+ * file. This should be faster than iterating over all pids, but it's
+ * racy in the same way. */
 void build_child_tree_childrenfile(char *pid_state, pid_t max_pid) {
     memset(pid_state, PID_UNRELATED, max_pid);
-    /* TOOD THIS IS WRONG WE NEED TO ITERATE OVER ALL TIDS */
+    /* TOOD this is wrong, we need to iterate over all tids */
     void mark_child(pid_t pid) {
 	FILE *children = get_children_stream(pid);
 	/* we assume that if we can't open its children file, this
@@ -124,13 +126,13 @@ void signal_all_children(int signum) {
 }
 
 /* On return, we guarantee that the current process has no more children. */
-void filicide() {
+void filicide(void) {
     signal_all_children(SIGKILL);
 }
-
-/* One other possible approach to filicide is to iterate over our
+/* Another possible implementation of filicide is to iterate over our
  * current children and kill them, and repeat until we don't see any
- * more current children. That would avoid iteration of proc. */
+ * more living children. That would avoid any tree-building, but it
+ * can only work for sending SIGKILL. */
 
 const int deathsigs[] = {
     /* signals making us terminate */
@@ -159,7 +161,7 @@ const int deathsigs[] = {
     SIGXCPU,
     SIGXFSZ,
 };
-/* returns the set of signals that are not blocked or ignored */
+/* returns the set of fatal signals that are not blocked or ignored */
 sigset_t fatalsig_set(void) {
     sigset_t already_blocked;
     try_(sigprocmask(0, NULL, &already_blocked));

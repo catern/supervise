@@ -2,6 +2,7 @@
 #include <signal.h>
 int try_function(int ret, const char *file, int line, const char *function, const char *program);
 
+/* a minor utility macro to check return codes and exit if <0. */
 #define try_(x) \
     try_function(x, __FILE__, __LINE__, __FUNCTION__, #x )
 
@@ -16,5 +17,5 @@ int get_childfd(void);
 
 /* Marks SIGPIPE as ignored. */
 void disable_sigpipe(void);
-/* Makes the passed-in FD cloexec and nonblocking. */
+/* Sets O_CLOEXEC and O_NONBLOCK on the passed-in fd */
 void make_fd_cloexec_nonblock(int fd);

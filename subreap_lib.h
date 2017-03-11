@@ -2,7 +2,7 @@
 #include <signal.h>
 
 /* On return, we guarantee that the current process has no more children. */
-void filicide();
+void filicide(void);
 
 /* Returns a signalfd which is readable when we get a signal which is
  * fatal. (and isn't blocked or ignored going into this function.)

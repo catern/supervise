@@ -16,10 +16,7 @@
 #include "common.h"
 #include "subreap_lib.h"
 
-/* screw it, I'm just going to assume that this is a single line */
-/* it could actually be multiple lines, but meh */
-void handle_control_message(int main_child_pid, char *str) {
-    /* TODO sscanf is unsafe blargh */
+void handle_command(char *command, int main_child_pid) {
     uint32_t signal = -1;
     if (sscanf(str, "signal %u\n", &signal) == 1) {
 	if (main_child_pid != -1) {
@@ -35,7 +32,7 @@ void read_controlfd(int controlfd, int main_child_pid) {
     char buf[4096] = {};
     while ((size = try_(read(controlfd, &buf, sizeof(buf)-1))) > 0) {
 	buf[size] = '\0';
-	/* TODO we assume we get full lines, one line at a time */
+	/* BUG we assume we get full lines, one line at a time */
 	handle_control_message(main_child_pid, buf);
 	memset(buf, 0, sizeof(buf));
     }
@@ -75,13 +72,13 @@ void read_childfd(int childfd, int statusfd, int main_child_pid) {
 	    /* we only report information for our main child */
 	    if (childinfo.si_pid != main_child_pid) continue;
 
-	    /* stringify wstatus and print it */
+	    /* stringify the state change and print it */
 	    if (childinfo.si_code == CLD_EXITED) {
 		dprintf(statusfd, "exited %d\n", childinfo.si_status);
 	    } else if (childinfo.si_code == CLD_KILLED) {
-		dprintf(statusfd, "signalled %s\n", strsignal(childinfo.si_status));
+		dprintf(statusfd, "signaled %s\n", strsignal(childinfo.si_status));
 	    } else if (childinfo.si_code == CLD_DUMPED) {
-		dprintf(statusfd, "signalled %s (coredumped)\n", strsignal(childinfo.si_status));
+		dprintf(statusfd, "signaled %s (coredumped)\n", strsignal(childinfo.si_status));
 	    } else if (childinfo.si_code == CLD_STOPPED) {
 		dprintf(statusfd, "stopped %s\n", strsignal(childinfo.si_status));
 	    } else if (childinfo.si_code == CLD_CONTINUED) {

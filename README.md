@@ -1,11 +1,50 @@
-This provides a superior API for process management on Linux,
-in the form of a small utility "supervise".
+Summary
+=======
 
-There are three main features:
+This provides a superior API for process management and supervision on Linux,
+in the form of a minimal and unprivileged utility "supervise".
+supervise is designed to be used as a wrapper for child processes you execute.
+Therefore supervise is designed to only wake up when there is an event to be handled,
+and it otherwise consumes no CPU time.
 
-- The ability to monitor a child process's status through a file descriptor interface
-- The ability to send a signal to all transitive children of a process through a file descriptor interface
-- Guaranteed cleanup of a child process and all its transitive children
+There are four main benefits of using supervise to wrap child processes:
+
+- The ability to get notified of child process exit or status change through a file descriptor interface
+- The ability to send a signal to all the transitive children of a child process
+- Automatic termination of your child processes when you exit (by virtue of the fd interface)
+- Guaranteed termination of all the transitive children of a child
+  process; no possibility of orphans lingering on the system
+
+It is a fully supported design goal for supervise to be usable in a nested way.
+You can wrap a child process with `supervise` which in turn forks off more child processes and wraps them in `supervise`,
+in arbitrary configurations and depths.
+
+Behavior
+========
+
+supervise `fork`s and `execvp`s a single immediate child process.
+supervise then monitors two file descriptors passed in at startup,
+the `controlfd` and the `statusfd`
+(in most use cases these will be the same fd),
+as well as waiting for the immediate child process to change state.
+
+supervise reads `signal` or `signal_all` commands from `controlfd`,
+which respectively command supervise to send a given signal to the immediate child process or to all of supervise's transitive children.
+
+When the immediate child process changes state, such as by exiting,
+supervise writes the state change to `statusfd`.
+
+When supervise exits, it terminates all its transitive children.
+It is not possible for transitive children of supervise to escape supervise's notice,
+so when supervise exits it fully cleans up all processes that were created by it or its transitive children.
+This is achieved through the use of CHILD_SUBREAPER Linux API.
+
+If supervise receives a POLLHUP on both the `controlfd` and the `statusfd`, it will exit.
+So if you fork off a child and wrap it with supervise,
+that child and all its transitive children will automatically be cleaned up when you exit.
+
+Invocation and use
+==================
 
 Supervise is invoked like this:
 
@@ -32,11 +71,33 @@ which is implemented something like this:
         return fdB;
 	}
 
-To signal the immediate child, write `signal [signum]`.
-To signal all children, write `signal_all [signum]`.
-To learn about status changes in the immediate child,
-monitor the file descriptor for readability,
-and read out messages of the form `exited [status code]` etc.
+controlfd commands
+------------------
+
+Write the following commands to `controlfd` to have the corresponding effect.
+Follow all commands with a newline.
+
+- `signal [signum]`: Send signal number `signum` to the immediate child
+- `signal_all [signum]`: Send signal number `signum` to all transitive children
+
+A binary interface will be supported soon.
+
+statusfd updates
+----------------
+
+Read the following messages from `statusfd` to learn about the corresponding status changes.
+All messages are followed by a newline.
+
+- `exited [status code]`: The immediate child has exited
+- `signaled [signal string]`: The immediate child has terminated due to a signal.
+- `signaled [signal string] (coredumped)`: The immediate child has terminated due to a signal, and dumped core.
+- `stopped [signal string]`: The immediate child has stopped due to a signal
+- `continued`: The immediate child has continued due to SIGCONT.
+
+A binary interface will be supported soon.
+
+When does supervise exit?
+=========================
 
 To assure you of the correctness of supervise, know that supervise will exit in these four cases:
 
@@ -55,3 +116,10 @@ We will also exit in these two cases:
 
 In these cases, some of our children may be able to leak.
 Hopefully some day soon these holes can be removed by kernel support for an API like this.
+
+TODO
+====
+
+- Support a binary interface in addition to the text interface
+- Fix the text interface to cope with partial reads and multiple lines per read
+- Optimization: support reading `/proc/[pid]/task/[tid]/children`
