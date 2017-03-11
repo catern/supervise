@@ -1,22 +1,3 @@
-/* 
-This provides a superior API for process management.
-There are three main features:
-- The ability to monitor a child process's status through a file descriptor interface
-- The ability to send a signal to all transitive children of a process through a file descriptor interface
-- After exit, guaranteed cleanup of all transitive children of a process
-
-We exit in these four cases:
-- Control and/or status fds for communication were passed in, and they have all closed.
-- All our children are dead.
-- We received a non-SIGKILL fatal signal that was not blocked or ignored when we started.
-- Some believed-to-be-impossible syscall error happened
-In all of these cases, after we exit, all of our children will be dead.
-(And our communication fds will be closed)
-We will also exit in these two cases:
-- We received SIGKILL
-- A second believed-to-be-impossible syscall error happened during exiting
-In these cases, some of our children may be able to leak.
- */
 #define _GNU_SOURCE
 #include <sys/types.h>
 #include <sys/wait.h>
