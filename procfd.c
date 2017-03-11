@@ -20,6 +20,8 @@ through PR_SET_PDEATHSIG
 
 TODO: support writing and reading in binary
 and switch between text and binary based on a flag
+
+also this is vulnerable to pid wrap attacks
  */
 #define _GNU_SOURCE
 #include <sys/types.h>
@@ -39,10 +41,10 @@ and switch between text and binary based on a flag
 
 int try_function(int ret, const char *file, int line, const char *function, const char *program)
 {
-    if (ret < 0) {
+    if (ret < 0 && errno != EAGAIN) {
 	warn("%s:%d %s: Failed to %s", file, line, function, program);
 	raise(SIGABRT);
-	exit(1);
+	exit(EXIT_FAILURE);
     }
     return ret;
 }
@@ -50,112 +52,59 @@ int try_function(int ret, const char *file, int line, const char *function, cons
 #define try_(x) \
     try_function(x, __FILE__, __LINE__, __FUNCTION__, #x )
 
-/* the pid of our child */
-int childpid;
-/* we read signals to send from here */
-int controlfd;
-/* we write child state changes here */
-int statusfd;
-/* we read sigchld siginfos from here*/
-int sigchldfd;
+void read_childfd(int childfd, int main_child_pid, int statusfd) {
+    struct signalfd_siginfo siginfo;
+    /* signalfds can't have partial reads */
+    while (try_(read(childfd, &siginfo, sizeof(siginfo))) == sizeof(siginfo)) {
+	siginfo_t childinfo;
+	while (try_(waitid(P_ALL, 0, &childinfo, WEXITED|WNOHANG)) >= 0) {
+	    if (childinfo.si_pid != main_child_pid) continue;
 
-/* a SIGCHLD doesn't necessarily mean we will exit - the child may
- * have just changed status. so we call this in a loop, and return
- * true iff we were able to wait() on something */
-bool handle_sigchld() {
-    int wstatus;
-    /* TODO should we check for ECHLD and not exit? */
-    if (try_(waitpid(childpid, &wstatus, WNOHANG|WUNTRACED|WCONTINUED)) == 0) return false;
-    /* stringify wstatus and print it */
-    if (WIFEXITED(wstatus)) {
-	dprintf(statusfd, "exited %d\n", WEXITSTATUS(wstatus));
-    } else if (WIFSIGNALED(wstatus)) {
-	if (WCOREDUMP(wstatus)) {
-	    dprintf(statusfd, "signalled %s (coredumped)\n", strsignal(WTERMSIG(wstatus)));
-	} else {
-	    dprintf(statusfd, "signalled %s\n", strsignal(WTERMSIG(wstatus)));
+	    /* stringify wstatus and print it */
+	    if (childinfo.si_code == CLD_EXITED) {
+		dprintf(statusfd, "exited %d\n", childinfo.si_status);
+	    } else if (childinfo.si_code == CLD_KILLED) {
+		dprintf(statusfd, "signalled %s\n", strsignal(childinfo.si_status));
+	    } else if (childinfo.si_code == CLD_DUMPED) {
+		dprintf(statusfd, "signalled %s (coredumped)\n", strsignal(childinfo.si_status));
+	    } else if (childinfo.si_code == CLD_STOPPED) {
+		dprintf(statusfd, "stopped %s\n", strsignal(childinfo.si_status));
+	    } else if (childinfo.si_code == CLD_CONTINUED) {
+		dprintf(statusfd, "continued\n");
+	    }
+
+	    if (childinfo.si_code == CLD_EXITED) {
+		exit(childinfo.si_status);
+	    } else if (childinfo.si_code == CLD_KILLED || childinfo.si_code == CLD_DUMPED) {
+		exit(EXIT_FAILURE);
+	    }
 	}
-    } else if (WIFSTOPPED(wstatus)) {
-	    dprintf(statusfd, "stopped %s\n", strsignal(WSTOPSIG(wstatus)));
-    } else if (WIFCONTINUED(wstatus)) {
-	    dprintf(statusfd, "continued\n");
-    }
-
-    if (WIFEXITED(wstatus)) {
-    	exit(WEXITSTATUS(wstatus));
-    } else if (WIFSIGNALED(wstatus)) {
-    	exit(1);
-    }
-    return true;
-}
-
-void read_sigchldfd() {
-    for (;;) {
-	struct signalfd_siginfo siginfo;
-	int ret = read(sigchldfd, &siginfo, sizeof(siginfo));
-	if (ret < 0) {
-	    if (errno == EAGAIN) return;
-	    err(1, "%s:%d %s: Failed to read(sigchldfd, &siginfo, sizeof(siginfo))",
-		__FILE__, __LINE__, __FUNCTION__);
-	}
-	while (handle_sigchld());
     }
 }
 
 /* screw it, I'm just going to assume that this is a single line */
 /* it could actually be multiple lines, but meh */
-void handle_control_message(char *str) {
+void handle_control_message(int main_child_pid, char *str) {
     /* TODO sscanf is unsafe blargh */
     uint32_t signal = -1;
     if (sscanf(str, "signal %u\n", &signal) < 1) {
 	err(1, "%s:%d %s: Failed to read(controlfd, &buf, sizeof(buf)-1)",
 	    __FILE__, __LINE__, __FUNCTION__);
     }
-    try_(kill(childpid, signal));
+    try_(kill(main_child_pid, signal));
 }
 
-void read_controlfd() {
+void read_controlfd(int controlfd, int main_child_pid) {
     for (;;) {
 	char buf[4096] = {};
 	int ret = read(controlfd, &buf, sizeof(buf)-1);
 	if ((ret == -1 && errno == EAGAIN) || ret == 0) return;
 	if (ret < 0) {
-	    if (errno == EAGAIN) return;
 	    err(1, "%s:%d %s: Failed to read(controlfd, &buf, sizeof(buf)-1)",
 		__FILE__, __LINE__, __FUNCTION__);
 	}
 	buf[ret] = '\0';
-	handle_control_message(buf);
-    }
-}
-
-void do_poll(int timeout) {
-    struct pollfd pollfds[2] = {
-	{ .fd = sigchldfd, .events = POLLIN, .revents = 0, },
-	{ .fd = controlfd, .events = POLLIN|POLLRDHUP, .revents = 0, },
-    };
-    if (try_(poll(pollfds, 2, timeout)) == 0) {
-	return;
-    }
-    short sigchldfd_events = pollfds[0].revents;
-    if (sigchldfd_events & (POLLERR|POLLHUP|POLLNVAL)) {
-	errx(1, "%s:%d %s: Error event %x returned for sigchldfd",
-	     __FILE__, __LINE__, __FUNCTION__, sigchldfd_events);
-    }
-    if (sigchldfd_events & POLLIN) {
-	read_sigchldfd();
-    }
-    short controlfd_events = pollfds[1].revents;
-    if (controlfd_events & (POLLERR|POLLNVAL)) {
-	errx(1, "%s:%d %s: Error event %x returned for controlfd",
-	     __FILE__, __LINE__, __FUNCTION__, controlfd_events);
-    }
-    if (controlfd_events & POLLIN) {
-	read_controlfd();
-    }
-    if (controlfd_events & (POLLRDHUP|POLLHUP)) {
-	try_(kill(childpid, SIGTERM));
-	controlfd = -1;
+	handle_control_message(main_child_pid, buf);
     }
 }
 
@@ -208,28 +157,42 @@ sigset_t singleton_set(int signum) {
     return sigset;
 }
 int main(int argc, char **argv) {
-    {   struct sigaction sa = {};
-	sa.sa_handler = SIG_IGN;
-	sigaction(SIGPIPE, &sa, NULL); };
+    { struct sigaction sa = {};
+      sa.sa_handler = SIG_IGN;
+      sigaction(SIGPIPE, &sa, NULL); };
     struct options opt = get_options(argc, argv);
-    statusfd = opt.statusfd;
-    controlfd = opt.controlfd;
-    signal(SIGPIPE, SIG_IGN);
 
     sigset_t original_blocked_signals;
-    sigset_t sigchld_set = singleton_set(SIGCHLD);
-    try_(sigprocmask(SIG_BLOCK, &sigchld_set, &original_blocked_signals));
-    sigchldfd = try_(signalfd(-1, &sigchld_set, SFD_NONBLOCK|SFD_CLOEXEC));
+    try_(sigprocmask(0, NULL, &original_blocked_signals));
 
-    do_poll(0);
+    sigset_t childsig = singleton_set(SIGCHLD);
+    try_(sigprocmask(SIG_BLOCK, &childsig, NULL));
+    int childfd = try_(signalfd(-1, &childsig, SFD_NONBLOCK|SFD_CLOEXEC));
 
-    childpid = try_(fork());
-    if (childpid == 0) {
+    pid_t main_child_pid = try_(fork());
+    if (main_child_pid == 0) {
 	/* the child will automatically get sigterm when the parent dies */
 	prctl(PR_SET_PDEATHSIG, SIGTERM);
 	/* restore the signal mask */
 	try_(sigprocmask(SIG_SETMASK, &original_blocked_signals, NULL));
 	try_(execvp(opt.exec_file, opt.exec_argv));
     }
-    for (;;) do_poll(-1);
+
+    struct pollfd pollfds[2] = {
+	{ .fd = childfd, .events = POLLIN, .revents = 0, },
+	{ .fd = opt.controlfd, .events = POLLIN|POLLRDHUP, .revents = 0, },
+    };
+    for (;;) {
+	try_(poll(pollfds, 2, -1));
+	if (pollfds[0].revents & POLLIN) read_childfd(childfd, main_child_pid, opt.statusfd);
+	if (pollfds[1].revents & POLLIN) read_controlfd(opt.controlfd, main_child_pid);
+	if (pollfds[1].revents & (POLLRDHUP|POLLHUP)) {
+	    try_(kill(main_child_pid, SIGTERM));
+	    opt.controlfd = -1;
+	}
+	if ((pollfds[0].revents & (POLLERR|POLLHUP|POLLNVAL)) ||
+	    (pollfds[1].revents & (POLLERR|POLLNVAL))) {
+	    errx(1, "Error event returned by poll");
+	}
+    }
 }

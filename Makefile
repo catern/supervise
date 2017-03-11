@@ -1,4 +1,4 @@
-all: procfd
+all: procfd subreap
 
 procfd: procfd.c
 	gcc -g -Wall -Wextra procfd.c -o procfd
