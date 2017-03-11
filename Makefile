@@ -1,4 +1,4 @@
-all: procfd subreap supervise
+all: supervise
 
 PROCFD_SOURCES=procfd.c common.c subreap_lib.c
 procfd: $(PROCFD_SOURCES)

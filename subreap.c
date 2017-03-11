@@ -22,6 +22,22 @@ subreap will kill all its children and exit with the same exit code.
 #include "subreap_lib.h"
 #include "common.h"
 
+void read_fatalfd(int fatalfd) {
+    struct signalfd_siginfo siginfo;
+    /* signalfds can't have partial reads */
+    while (try_(read(fatalfd, &siginfo, sizeof(siginfo))) == sizeof(siginfo)) {
+	/* explicitly filicide, since dying from a signal won't call exit handlers */
+	filicide();
+	/* allow the signal to be delivered and kill us */
+	sigset_t singleton = singleton_set(siginfo.ssi_signo);
+	try_(sigprocmask(SIG_UNBLOCK, &singleton, NULL));
+	raise(siginfo.ssi_signo);
+	/* exit just in case it doesn't kill us */
+	fprintf(stderr, "signal %d doesn't seem to have killed us\n", siginfo.ssi_signo);
+	exit(EXIT_FAILURE);
+    }
+}
+
 struct options {
     char *exec_file;
     char **exec_argv;

@@ -3,14 +3,21 @@
 #include <sys/signalfd.h>
 #include <sys/wait.h>
 #include <err.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <stdbool.h>
 
 int try_function(int ret, const char *file, int line, const char *function, const char *program)
 {
+    static int exiting = false;
+    if (exiting == true) {
+	warn("%s:%d %s: DOUBLE FAULT! Failed to %s", file, line, function, program);
+	_exit(1);
+    }
     if (ret < 0 && errno != EAGAIN) {
 	warn("%s:%d %s: Failed to %s", file, line, function, program);
-	raise(SIGABRT);
+	exiting = true;
 	exit(1);
     }
     return ret;
@@ -42,13 +49,10 @@ void disable_sigpipe(void) {
     sigaction(SIGPIPE, &sa, NULL);
 }
 
-void read_childfd(int childfd, void (*handler)(siginfo_t)) {
-    struct signalfd_siginfo siginfo;
-    /* signalfds can't have partial reads */
-    while (try_(read(childfd, &siginfo, sizeof(siginfo))) == sizeof(siginfo)) {
-	siginfo_t childinfo;
-	while (try_(waitid(P_ALL, 0, &childinfo, WEXITED|WNOHANG)) >= 0) {
-	    handler(childinfo);
-	}
-    }
+void make_fd_cloexec_nonblock(int fd) {
+    int fd_flags = try_(fcntl(fd, F_GETFD));
+    try_(fcntl(fd, F_SETFD, fd_flags|FD_CLOEXEC));
+
+    int fl_flags = try_(fcntl(fd, F_GETFL));
+    try_(fcntl(fd, F_SETFL, fl_flags|O_NONBLOCK));
 }

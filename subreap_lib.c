@@ -110,7 +110,10 @@ void signal_all_children(int signum) {
 	for (pid_t pid = 1; pid < max_pid; pid++) {
 	    if (pid_state[pid] == PID_DESCENDED && pid != mypid && !already_signaled[pid]) {
 		fprintf(stderr, "killing %d with %d\n", pid, signum);
-		kill(pid, signum);
+		/* the kill can't fail. this pid must existed since it
+		 * was marked as a descendent, and if it exited it's
+		 * still a zombie */
+		try_(kill(pid, signum));
 		already_signaled[pid] = true;
 		/* if we signaled something new, it could have forked and we missed its
 		 * child when building the tree. so there's maybe more to signal */
@@ -179,20 +182,4 @@ int get_fatalfd(void) {
     try_(sigprocmask(SIG_BLOCK, &fatalsigs, &original_blocked_signals));
     int fatalfd = try_(signalfd(-1, &fatalsigs, SFD_NONBLOCK|SFD_CLOEXEC));
     return fatalfd;
-}
-
-void read_fatalfd(int fatalfd) {
-    struct signalfd_siginfo siginfo;
-    /* signalfds can't have partial reads */
-    while (try_(read(fatalfd, &siginfo, sizeof(siginfo))) == sizeof(siginfo)) {
-	/* explicitly filicide, since dying from a signal won't call exit handlers */
-	filicide();
-	/* allow the signal to be delivered and kill us */
-	sigset_t singleton = singleton_set(siginfo.ssi_signo);
-	try_(sigprocmask(SIG_UNBLOCK, &singleton, NULL));
-	raise(siginfo.ssi_signo);
-	/* exit just in case it doesn't kill us */
-	fprintf(stderr, "signal %d doesn't seem to have killed us\n", siginfo.ssi_signo);
-	exit(EXIT_FAILURE);
-    }
 }
