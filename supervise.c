@@ -1,25 +1,5 @@
 /* 
-a utility called procfd.
-
-it accepts two fds named on the command line, controlfd and statusfd
-it forks a single child and execvp's the rest of its arguments
-
-it:
-- waits to be able to read controlfd
-- waits for the child to exit
-
-if it is able to read a line from controlfd, and if that line matches "signal %d",
-    it sends that signal to the child
-if the fd closes,
-    it sends SIGTERM to the child
-if the child exits,
-    it writes the exit status of the child to statusfd, and exits with the same code
-
-furthermore, if this utility exits, the child automatically receives SIGTERM,
-through PR_SET_PDEATHSIG
-
-TODO: support writing and reading in binary
-and switch between text and binary based on a flag
+THE SUPERVISOR!!!!!!!
  */
 #define _GNU_SOURCE
 #include <sys/types.h>
@@ -44,23 +24,24 @@ and switch between text and binary based on a flag
 void handle_control_message(int main_child_pid, char *str) {
     /* TODO sscanf is unsafe blargh */
     uint32_t signal = -1;
-    if (sscanf(str, "signal %u\n", &signal) == 1) {
-	if (main_child_pid != -1) {
-	    try_(kill(main_child_pid, signal));
-	}
-    } else if (sscanf(str, "signal_all %u\n", &signal) == 1) {
-	signal_all_children(signal);
+    if (sscanf(str, "signal %u\n", &signal) < 1) {
+	err(1, "%s:%d %s: Failed to read(controlfd, &buf, sizeof(buf)-1)",
+	    __FILE__, __LINE__, __FUNCTION__);
     }
+    try_(kill(main_child_pid, signal));
 }
 
 void read_controlfd(int controlfd, int main_child_pid) {
-    int size;
-    char buf[4096] = {};
-    while ((size = try_(read(controlfd, &buf, sizeof(buf)-1))) > 0) {
-	buf[size] = '\0';
-	/* TODO we assume we get full lines, one line at a time */
+    for (;;) {
+	char buf[4096] = {};
+	int ret = read(controlfd, &buf, sizeof(buf)-1);
+	if ((ret == -1 && errno == EAGAIN) || ret == 0) return;
+	if (ret < 0) {
+	    err(1, "%s:%d %s: Failed to read(controlfd, &buf, sizeof(buf)-1)",
+		__FILE__, __LINE__, __FUNCTION__);
+	}
+	buf[ret] = '\0';
 	handle_control_message(main_child_pid, buf);
-	memset(buf, 0, sizeof(buf));
     }
 }
 
@@ -105,12 +86,20 @@ get_options(int argc, char **argv) {
     };
     return opt;
 }
-
 int main(int argc, char **argv) {
-    disable_sigpipe();
+    { struct sigaction sa = {};
+      sa.sa_handler = SIG_IGN;
+      sigaction(SIGPIPE, &sa, NULL); };
     struct options opt = get_options(argc, argv);
 
+    /* give it a trial run to see if we can do it - it's idempotent, so no worries */
+    filicide();
+    atexit(filicide);
+
+    try_(prctl(PR_SET_CHILD_SUBREAPER, true));
+
     sigset_t original_blocked_signals = get_blocked_signals();
+    int fatalfd = get_fatalfd();
     int childfd = get_childfd();
 
     pid_t main_child_pid = try_(fork());
@@ -122,9 +111,10 @@ int main(int argc, char **argv) {
 	try_(execvp(opt.exec_file, opt.exec_argv));
     }
 
-    struct pollfd pollfds[2] = {
+    struct pollfd pollfds[3] = {
 	{ .fd = childfd, .events = POLLIN, .revents = 0, },
 	{ .fd = opt.controlfd, .events = POLLIN|POLLRDHUP, .revents = 0, },
+	{ .fd = fatalfd, .events = POLLIN, .revents = 0, },
     };
     void handle_child_status(siginfo_t childinfo) {
 	if (childinfo.si_pid != main_child_pid) return;
@@ -141,30 +131,19 @@ int main(int argc, char **argv) {
 	} else if (childinfo.si_code == CLD_CONTINUED) {
 	    dprintf(opt.statusfd, "continued\n");
 	}
-
-	if (childinfo.si_code == CLD_EXITED ||
-	    childinfo.si_code == CLD_KILLED ||
-	    childinfo.si_code == CLD_DUMPED) {
-	    main_child_pid = -1;
-	}
     }
     for (;;) {
-	try_(poll(pollfds, 2, -1));
+	try_(poll(pollfds, 3, -1));
 	if (pollfds[0].revents & POLLIN) read_childfd(childfd, handle_child_status);
 	if (pollfds[1].revents & POLLIN) read_controlfd(opt.controlfd, main_child_pid);
 	if (pollfds[1].revents & (POLLRDHUP|POLLHUP)) {
-	    /* we exit only when the controlfd is closed */
-	    /* this is not vulnerable to pid wrap attacks, if
-	     * main_child_pid has exited then it will still be a
-	     * zombie at this point */
-	    if (main_child_pid != -1) try_(kill(main_child_pid, SIGTERM));
-	    /* we try to send out the changed status of our child one
-	     * last time, if statusfd is still open. */
-	    read_childfd(childfd, handle_child_status);
-	    exit(0);
+	    try_(kill(main_child_pid, SIGTERM));
+	    opt.controlfd = -1;
 	}
+	if (pollfds[2].revents & POLLIN) read_fatalfd(fatalfd);
 	if ((pollfds[0].revents & (POLLERR|POLLHUP|POLLNVAL)) ||
-	    (pollfds[1].revents & (POLLERR|POLLNVAL))) {
+	    (pollfds[1].revents & (POLLERR|POLLNVAL)) ||
+	    (pollfds[2].revents & (POLLERR|POLLHUP|POLLNVAL))) {
 	    errx(1, "Error event returned by poll");
 	}
     }
