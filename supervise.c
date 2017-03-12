@@ -16,40 +16,41 @@
 #include "common.h"
 #include "subreap_lib.h"
 
-void handle_command(char *command, int main_child_pid) {
+void handle_command(const char *command, const int main_child_pid) {
     uint32_t signal = -1;
-    if (sscanf(str, "signal %u\n", &signal) == 1) {
+    if (sscanf(command, "signal %u\n", &signal) == 1) {
 	if (main_child_pid != -1) {
 	    try_(kill(main_child_pid, signal));
 	}
-    } else if (sscanf(str, "signal_all %u\n", &signal) == 1) {
+    } else if (sscanf(command, "signal_all %u\n", &signal) == 1) {
 	signal_all_children(signal);
     }
 }
 
-void read_controlfd(int controlfd, int main_child_pid) {
+void read_controlfd(const int controlfd, const int main_child_pid) {
     int size;
     char buf[4096] = {};
     while ((size = try_(read(controlfd, &buf, sizeof(buf)-1))) > 0) {
 	buf[size] = '\0';
 	/* BUG we assume we get full lines, one line at a time */
-	handle_control_message(main_child_pid, buf);
+	/* (that's not as dangerous as it might seem due to pipe atomicity) */
+	handle_command(buf, main_child_pid);
 	memset(buf, 0, sizeof(buf));
     }
 }
 
-void read_fatalfd(int fatalfd) {
+void read_fatalfd(const int fatalfd) {
     struct signalfd_siginfo siginfo;
     /* signalfds can't have partial reads */
     while (try_(read(fatalfd, &siginfo, sizeof(siginfo))) == sizeof(siginfo)) {
 	/* explicitly filicide, since dying from a signal won't call exit handlers */
 	filicide();
 	/* allow the signal to be delivered and kill us */
-	sigset_t singleton = singleton_set(siginfo.ssi_signo);
+	const sigset_t singleton = singleton_set(siginfo.ssi_signo);
 	try_(sigprocmask(SIG_UNBLOCK, &singleton, NULL));
 	raise(siginfo.ssi_signo);
 	/* exit just in case it doesn't kill us */
-	fprintf(stderr, "signal %d doesn't seem to have killed us\n", siginfo.ssi_signo);
+	warnx("signal %d doesn't seem to have killed us", siginfo.ssi_signo);
 	exit(EXIT_FAILURE);
     }
 }
@@ -61,7 +62,7 @@ void read_childfd(int childfd, int statusfd, int main_child_pid) {
 	siginfo_t childinfo = {};
 	for (;;) {
 	    childinfo.si_pid = 0;
-	    int ret = waitid(P_ALL, 0, &childinfo, WEXITED|WNOHANG);
+	    const int ret = waitid(P_ALL, 0, &childinfo, WEXITED|WNOHANG);
 	    if (ret == -1 && errno == ECHILD) {
 		/* no more children. there's nothing else we can do, so we exit */
 		exit(0);
@@ -99,33 +100,25 @@ struct options {
 struct options
 get_options(int argc, char **argv) {
     if (argc < 2) {
-	fprintf(stderr, "Usage: %s controlfd statusfd [command]\n", (argv[0] ? argv[0] : "procfd"));
+	warnx("Usage: %s controlfd statusfd [command]", (argv[0] ? argv[0] : "procfd"));
 	exit(1);
     }
-    errno = 0;
-    int controlfd = strtol(argv[1], NULL, 0);
-    if (errno != 0) {
-	err(1, "strtol error on %s", argv[1]);
-    }
+    const int controlfd = str_to_int(argv[1]);
     if (controlfd >= 0) {
 	make_fd_cloexec_nonblock(controlfd);
     }
-    errno = 0;
-    int statusfd = strtol(argv[2], NULL, 0);
-    if (errno != 0) {
-	err(1, "strtol error on %s", argv[2]);
-    }
+    const int statusfd = str_to_int(argv[2]);
     if (statusfd >= 0) {
 	make_fd_cloexec_nonblock(statusfd);
     }
-    struct options opt = {
+    const struct options opt = {
 	.exec_file = argv[3],
 	.exec_argv = argv+3,
 	.controlfd = controlfd,
 	.statusfd = statusfd,
 	/* if we don't have a statusfd or controlfd, we should just hang
 	 * around until we get a signal, to be useful on the command line. */
-	.should_hang = opt.statusfd != -1 || opt.controlfd != -1,
+	.should_hang = opt.statusfd == -1 && opt.controlfd == -1,
     };
     return opt;
 }
@@ -134,19 +127,21 @@ int main(int argc, char **argv) {
     disable_sigpipe();
     struct options opt = get_options(argc, argv);
 
-    /* give it a trial run to see if we can do it - it's idempotent, so no worries */
+    /* give filicide a trial run to see if we can do it;
+     * it's idempotent, so no worries */
     filicide();
     atexit(filicide);
 
     try_(prctl(PR_SET_CHILD_SUBREAPER, true));
 
-    sigset_t original_blocked_signals = get_blocked_signals();
-    int fatalfd = get_fatalfd();
-    int childfd = get_childfd();
+    const sigset_t original_blocked_signals = get_blocked_signals();
+    const int fatalfd = get_fatalfd();
+    const int childfd = get_childfd();
 
-    pid_t main_child_pid = try_(fork());
+    const pid_t main_child_pid = try_(fork());
     if (main_child_pid == 0) {
-	/* the child will automatically get sigterm when the parent dies */
+	/* the child will automatically get sigterm when the parent dies;
+	 * a last-ditch effort to be effective even if we get SIGKILL'd */
 	prctl(PR_SET_PDEATHSIG, SIGTERM);
 	/* restore the signal mask */
 	try_(sigprocmask(SIG_SETMASK, &original_blocked_signals, NULL));

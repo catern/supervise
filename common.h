@@ -1,5 +1,6 @@
 #pragma once
 #include <signal.h>
+#include <stdio.h>
 int try_function(int ret, const char *file, int line, const char *function, const char *program);
 
 /* a minor utility macro to check return codes and exit if <0. */
@@ -19,3 +20,11 @@ int get_childfd(void);
 void disable_sigpipe(void);
 /* Sets O_CLOEXEC and O_NONBLOCK on the passed-in fd */
 void make_fd_cloexec_nonblock(int fd);
+/* Convert passed string to an integer */
+int str_to_int(char const* str);
+
+#define _cleanup_(f) __attribute__((__cleanup__(f)))
+void cleanup_close_func(int const* fdp);
+#define _cleanup_close_ _cleanup_(cleanup_close_func)
+void cleanup_fclose_func(FILE* const* filepp);
+#define _cleanup_fclose_ _cleanup_(cleanup_fclose_func)

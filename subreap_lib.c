@@ -6,13 +6,18 @@
 #include <sys/wait.h>
 #include <sys/signalfd.h>
 #include <fcntl.h>
+#include <err.h>
 #include <string.h>
 #include <stdbool.h>
+#include <errno.h>
 #include "subreap_lib.h"
 #include "common.h"
 
 pid_t get_maxpid(void) {
-    return 32768;
+    int maxpidfd _cleanup_close_ = try_(open("/proc/sys/kernel/pid_max", O_RDONLY));
+    char buf[64] = {};
+    try_(read(maxpidfd, buf, sizeof(buf)));
+    return str_to_int(buf);
 }
 
 enum pid_state {
@@ -34,11 +39,11 @@ FILE *get_children_stream(pid_t pid) {
 /* Build a child tree, using the /proc/pid/task/tid/children
  * file. This should be faster than iterating over all pids, but it's
  * racy in the same way. */
-void build_child_tree_childrenfile(char *pid_state, pid_t max_pid) {
+void build_child_tree_children(char *pid_state, pid_t max_pid) {
     memset(pid_state, PID_UNRELATED, max_pid);
     /* TOOD this is wrong, we need to iterate over all tids */
     void mark_child(pid_t pid) {
-	FILE *children = get_children_stream(pid);
+	FILE *children _cleanup_fclose_ = get_children_stream(pid);
 	/* we assume that if we can't open its children file, this
 	 * process doesn't exist */
 	if (children == NULL) return;
@@ -51,23 +56,31 @@ void build_child_tree_childrenfile(char *pid_state, pid_t max_pid) {
     mark_child(getpid());
 }
 
+/* this returns -1 if there is no such pid (or if /proc/ is not available) */
 pid_t get_ppid_of(pid_t pid) {
     char buf[BUFSIZ];
-    int statfd;
     snprintf(buf, sizeof(buf), "/proc/%d/stat", pid);
-    if ((statfd = open(buf, O_CLOEXEC|O_RDONLY)) < 0) return -1;
+    const int statfd _cleanup_close_ = open(buf, O_CLOEXEC|O_RDONLY);
+    if (statfd < 0) {
+	if (errno == ENOENT) return -1;
+	err(1, "Failed to open(%s, O_CLOEXEC|O_RDONLY)", buf);
+    }
     buf[try_(read(statfd, buf, sizeof(buf)))] = '\0';
-    pid_t ppid = -1;
-    sscanf(buf, "%*d (%*[^)]) %*c %d", &ppid);
-    close(statfd);
-    return ppid;
+    /* the command string could have arbitrary characters in it, but
+     * it ends with ')', so search for the last ')' in the buffer. */
+    char *after_command = strrchr(buf, ')');
+    if (after_command == NULL) {
+	errx(1, "Failed to find ')' in %s", buf);
+    }
+    const int skip_to_ppid = 3;
+    return str_to_int(after_command + skip_to_ppid);
 }
 
 /* This is racy because a process could fork and create a new process
  * with a pid we already checked. However, we can solve the race by
  * calling this in a loop.
  */
-void build_child_tree(char *pid_state, pid_t max_pid) {
+void build_child_tree_stat(char *pid_state, const pid_t max_pid) {
     memset(pid_state, PID_UNCHECKED, max_pid);
     /* we are descended from ourselves */
     pid_state[getpid()] = PID_DESCENDED;
@@ -75,11 +88,11 @@ void build_child_tree(char *pid_state, pid_t max_pid) {
     pid_state[1] = PID_UNRELATED;
     /* neither is the kernel */
     pid_state[0] = PID_UNRELATED;
-    char check(pid_t pid) {
+    char check(const pid_t pid) {
 	if (pid < 0) return PID_UNRELATED;
 	if (pid_state[pid] == PID_UNCHECKED) {
 	    /* a pid's descended-status is the same as its parent */
-	    pid_t parent = get_ppid_of(pid);
+	    const pid_t parent = get_ppid_of(pid);
 	    pid_state[pid] = check(parent);
 	}
 	return pid_state[pid];
@@ -89,18 +102,33 @@ void build_child_tree(char *pid_state, pid_t max_pid) {
     }
 }
 
+bool check_for_stat() {
+    /* if we can't look up our own ppid, /proc/pid/stat is unavailable */
+    return get_ppid_of(getpid()) != -1;
+}
+
+/* check if various interfaces are available and use the fastest */
+void build_child_tree(char *pid_state, const pid_t max_pid) {
+    /* this is the only method we support for now */
+    if (check_for_stat()) {
+	return build_child_tree_stat(pid_state, max_pid);
+    } else {
+	errx(1, "No method to build_child_tree is available");
+    }
+}
+
 /* This signals each pid at most once, so it will halt. pid reuse
  * attacks are prevented by CHILD_SUBREAPER; we are choosing to not
  * collect children while in this function.  A malicious child (with
  * perfect timing) can at worst force us to loop max_pid times.
  */
-void signal_all_children(int signum) {
-    pid_t max_pid = get_maxpid();
+void signal_all_children(const int signum) {
+    const pid_t max_pid = get_maxpid();
+    const pid_t mypid = getpid();
     char pid_state[max_pid];
-
     bool already_signaled[max_pid];
     memset(already_signaled, false, max_pid);
-    pid_t mypid = getpid();
+
     bool maybe_more_to_signal = true;
     /* while there might be some child left unsignaled: */
     while (maybe_more_to_signal) {
@@ -111,7 +139,7 @@ void signal_all_children(int signum) {
 	/* signal all the children, skipping ones already signaled */
 	for (pid_t pid = 1; pid < max_pid; pid++) {
 	    if (pid_state[pid] == PID_DESCENDED && pid != mypid && !already_signaled[pid]) {
-		fprintf(stderr, "killing %d with %d\n", pid, signum);
+		warnx("killing %d with %d", pid, signum);
 		/* the kill can't fail. this pid must existed since it
 		 * was marked as a descendent, and if it exited it's
 		 * still a zombie */
@@ -161,14 +189,14 @@ const int deathsigs[] = {
     SIGXCPU,
     SIGXFSZ,
 };
+
 /* returns the set of fatal signals that are not blocked or ignored */
 sigset_t fatalsig_set(void) {
-    sigset_t already_blocked;
-    try_(sigprocmask(0, NULL, &already_blocked));
+    const sigset_t already_blocked = get_blocked_signals();
     sigset_t sigset;
     try_(sigemptyset(&sigset));
     for (int i = 0; i < (int)(sizeof(deathsigs)/sizeof(deathsigs[0])); i++) {
-	int signum = deathsigs[i];
+	const int signum = deathsigs[i];
 	if (try_(sigismember(&already_blocked, signum))) continue;
 	struct sigaction current;
 	try_(sigaction(signum, NULL, &current));
@@ -179,9 +207,8 @@ sigset_t fatalsig_set(void) {
 }
 
 int get_fatalfd(void) {
-    sigset_t original_blocked_signals;
-    sigset_t fatalsigs = fatalsig_set();
-    try_(sigprocmask(SIG_BLOCK, &fatalsigs, &original_blocked_signals));
+    const sigset_t fatalsigs = fatalsig_set();
+    try_(sigprocmask(SIG_BLOCK, &fatalsigs, NULL));
     int fatalfd = try_(signalfd(-1, &fatalsigs, SFD_NONBLOCK|SFD_CLOEXEC));
     return fatalfd;
 }
