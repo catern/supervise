@@ -99,8 +99,8 @@ struct options {
 
 struct options
 get_options(int argc, char **argv) {
-    if (argc < 2) {
-	warnx("Usage: %s controlfd statusfd [command]", (argv[0] ? argv[0] : "procfd"));
+    if (argc < 4) {
+	warnx("Usage: %s controlfd statusfd command [args [args [args...]]]", (argv[0] ? argv[0] : "procfd"));
 	exit(1);
     }
     const int controlfd = str_to_int(argv[1]);
