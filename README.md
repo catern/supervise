@@ -124,6 +124,131 @@ We will also exit in these two cases:
 In these cases, some of our children may be able to leak.
 Hopefully some day soon these holes can be removed by kernel support for an API like this.
 
+Daemonizing
+===========
+
+For most applications,
+automatic cleanup of child processes is very desirable.
+In most cases, your child processes should not outlive the parent process that kicked them off.
+
+However, sometimes you want to create a process which outlives your own.
+Some example use cases:
+- you are starting up a server which should live past your login session
+- you are starting a new login session which shouldn't be killed just because the login server went down
+Such processes are typically referred to as daemons.
+
+Achieving this with supervise requires that the `controlfd` passed to supervise will not get an EOF/POLLHUP after its parent process dies.
+If the `controlfd` is the read side of a pipe,
+that means there must exist an open FD to the write side of that pipe,
+even after the parent process (which presumably created the pipe and holds the write side FD) dies.
+
+This requirement seems strange; what does it mean?
+If you're curious, read the explanation in the next section.
+If you just want things to work, please feel free to skip over the explanation to the section below it.
+
+Long-winded philosophizing about approach
+-----------------------------------------
+
+This behavior is fundamentally a matter of reference counting, which is a concept fundamental to Unix and many other systems.
+We want our resource to stick around
+as long as there is at least one reference to that resource.
+A resource, once created, should be destructed if and only if both of these properties are true:
+- there are no more references
+- no more references can be created.
+Since (typically) references can only and always be created from existing references,
+those two properties are equivalent in most systems.
+
+In effect, supervise implements reference counting for processes,
+since there is no existing way on Linux to get an (unforgeable) reference to a process.
+We treat the `controlfd` passed in as a proxy for the underlying process started by supervise;
+that is, we treat the reference count on the `controlfd` as a proxy for the reference count on the process.
+
+Typically the `controlfd` will be the read end of a pipe.
+For a pipe created with pipe(3),
+we know that a poll(3) on the read side of the file descriptor,
+will return POLLHUP if and only if there are no more references to the write side of the pipe.
+So supervise knows when it gets POLLHUP that there are no more references to the write side of the pipe,
+and it translate this into meaning that there are no more references to the process.
+So the process should be destructed; that is, killed.
+
+Now we can restate what we want to do:
+we want to store a reference to the write side of the pipe,
+in a place outside our own process,
+so that that reference is not automatically deleted when our process exits.
+
+An immediately obvious way to do this,
+is to have a long-lived server which will store file descriptors passed to it and permit retrieving them later.
+In our case, however, there is no need for this.
+We can just use the filesystem!
+
+We can use a fifo (also known as a named pipe) instead of a pipe.
+A fifo is a file visible in the filesystem,
+and is a reference to both the write-side and the read-side of a pipe.
+As long as the fifo exists in the filesystem,
+new write-side file descriptors can be created.
+(Note that a file may exist in the filesystem multiple times,
+and may no longer exist in its original location while still existing somewhere, through rename(3), link(3) or unlink(3))
+So poll(3) should not return POLLHUP when polling on the read-side of a fifo, if that fifo still exists somewhere in the filesystem.
+
+Well, due to (what I view as) a design flaw in Unix, that's not true;
+poll(3) will return POLLHUP whenever there are no write-side file descriptors currently open,
+even if more could be created in the future.
+
+So I wrote the unlinkwait utility to watch an inode,
+the underlying reference-counted object behind a file or fifo,
+and exit when that inode is completely removed from the filesystem.
+That is, unlinkwait exits when the inode has a link count of 0;
+link count is the reference count for inodes.
+Once the link count hits 0, it cannot be increased,
+and the only way to create new references to the file is to duplicate existing file descriptors.
+
+We can pass a write-side file descriptor in to the unlinkwait process,
+tell unlinkwait to monitor the inode at /proc/self/fd/n,
+and when the fifo is completely gone from the filesystem,
+the unlinkwait process will exit and the write-side file descriptor it holds will be closed.
+So by using unlinkwait in conjunction with a fifo, we can have the reference counting behavior we desire.
+
+Interestingly,
+if an "flink" system call was added,
+which takes a file descriptor currently not linked in to the filesystem, and a path,
+and creates a new link at that path,
+this logic would no longer be correct.
+(Since link count could increase from 0.)
+In fact I think it would become fundamentally impossible to do this kind of reference counting across the filesystem and file descriptors:
+link count and POLLHUP are two pieces of information read from separate interfaces,
+and you would want to destruct your resource when link count is 0 and you are receiving POLLHUP,
+but there's no (existing) way to check both of those atomically.
+If anyone has thoughts about how to support this in the presence of flink,
+feel free to send me mail.
+
+How to run a daemon with supervise
+----------------------------------
+
+You want to run a process that outlasts any individual process,
+while still getting the control and cleanup attributes of supervise.
+
+Use the unlinkwait utility in this repository and a fifo as follows,
+adjusting the statusfd if you wish:
+
+    mkfifo fifo
+	unlinkwait /proc/self/fd/3 3>fifo &
+	supervise 3 3<fifo 4 4>status.log [command] &
+
+You may need to prefix `nohup` to these commands or follow up with a `disown` if you are actually running these commands from an interactive shell.
+
+This way supervise will exit (from getting a POLLHUP on the `controlfd`) if and only if both of these are true:
+
+- there are no open writable fds to the fifo
+- the fifo (and all hardlinks to it) is removed from the filesystem.
+  This is provided by unlinkwait, which is holding a writable fd to the fifo, and exits when the fifo is removed from the filesystem.
+
+Renaming and moving the fifo is fine.
+
+In other words, the lifecycle of the daemon is tied to the fifo inode,
+which is something that exists in the filesystem and outlasts any individual process.
+
+Also, conveniently, you can send commands to supervise with a simple `echo command > fifo`.
+
 TODO
 ====
 
