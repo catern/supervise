@@ -92,6 +92,7 @@ statusfd updates
 Read the following messages from `statusfd` to learn about the corresponding status changes.
 All messages are followed by a newline.
 
+- `pid [pid number]`: We have forked off the immediate child, and this is its pid.
 - `exited [status code]`: The immediate child has exited
 - `signaled [signal string]`: The immediate child has terminated due to a signal.
 - `signaled [signal string] (coredumped)`: The immediate child has terminated due to a signal, and dumped core.
