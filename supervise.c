@@ -118,7 +118,7 @@ get_options(int argc, char **argv) {
 	.statusfd = statusfd,
 	/* if we don't have a statusfd or controlfd, we should just hang
 	 * around until we get a signal, to be useful on the command line. */
-	.should_hang = opt.statusfd == -1 && opt.controlfd == -1,
+	.should_hang = opt.controlfd == -1,
     };
     return opt;
 }
@@ -148,37 +148,33 @@ int main(int argc, char **argv) {
 	try_(execvp(opt.exec_file, opt.exec_argv));
     }
 
-    struct pollfd pollfds[4] = {
+    dprintf(opt.statusfd, "pid %d\n", main_child_pid);
+
+    struct pollfd pollfds[3] = {
 	{ .fd = opt.controlfd, .events = POLLIN|POLLRDHUP, .revents = 0, },
-	{ .fd = opt.statusfd,  .events = POLLRDHUP, .revents = 0, },
 	{ .fd = childfd, .events = POLLIN, .revents = 0, },
 	{ .fd = fatalfd, .events = POLLIN, .revents = 0, },
     };
     for (;;) {
-	if (opt.controlfd == -1 && opt.statusfd == -1 && !opt.should_hang) {
+	if (opt.controlfd == -1 && !opt.should_hang) {
 	    /* We exit if our means of communication with our owner have closed. */
 	    exit(0);
 	}
-	try_(poll(pollfds, 4, -1));
+	try_(poll(pollfds, 3, -1));
 	if (pollfds[0].revents & POLLIN) read_controlfd(opt.controlfd, main_child_pid);
 	if (pollfds[0].revents & (POLLERR|POLLNVAL|POLLRDHUP|POLLHUP)) {
 	    close(opt.controlfd);
 	    opt.controlfd = -1;
 	    pollfds[0].fd = -1;
 	}
-	if (pollfds[1].revents & (POLLERR|POLLNVAL|POLLRDHUP|POLLHUP)) {
-	    close(opt.statusfd);
-	    opt.statusfd = -1;
-	    pollfds[1].fd = -1;
-	}
-	if (pollfds[2].revents & POLLIN) {
+	if (pollfds[1].revents & POLLIN) {
 	    read_childfd(childfd, opt.statusfd, main_child_pid);
 	}
-	if (pollfds[3].revents & POLLIN) {
+	if (pollfds[2].revents & POLLIN) {
 	    read_fatalfd(fatalfd);
 	}
-	if ((pollfds[2].revents & (POLLERR|POLLHUP|POLLNVAL)) ||
-	    (pollfds[3].revents & (POLLERR|POLLHUP|POLLNVAL))) {
+	if ((pollfds[1].revents & (POLLERR|POLLHUP|POLLNVAL)) ||
+	    (pollfds[2].revents & (POLLERR|POLLHUP|POLLNVAL))) {
 	    errx(1, "Error event returned by poll for signalfd");
 	}
     }

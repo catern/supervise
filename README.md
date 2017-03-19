@@ -31,6 +31,10 @@ as well as waiting for the immediate child process to change state.
 supervise reads `signal` or `signal_all` commands from `controlfd`,
 which respectively command supervise to send a given signal to the immediate child process or to all of supervise's transitive children.
 
+If supervise receives a POLLHUP on the `controlfd`, it will exit.
+So if you fork off a child and wrap it with supervise,
+that child and all its transitive children will automatically be cleaned up when you exit.
+
 When the immediate child process changes state, such as by exiting,
 supervise writes the state change to `statusfd`.
 
@@ -38,10 +42,6 @@ When supervise exits, it terminates all its transitive children.
 It is not possible for transitive children of supervise to escape supervise's notice,
 so when supervise exits it fully cleans up all processes that were created by it or its transitive children.
 This is achieved through the use of CHILD_SUBREAPER Linux API.
-
-If supervise receives a POLLHUP on both the `controlfd` and the `statusfd`, it will exit.
-So if you fork off a child and wrap it with supervise,
-that child and all its transitive children will automatically be cleaned up when you exit.
 
 Invocation and use
 ==================
@@ -80,6 +80,10 @@ Follow all commands with a newline.
 - `signal [signum]`: Send signal number `signum` to the immediate child
 - `signal_all [signum]`: Send signal number `signum` to all transitive children
 
+Furthermore, if supervise reads an EOF/POLLHUP from `controlfd`,
+indicating there are no more fds open which can write to `controlfd`,
+supervise will exit and clean up all its child processes.
+
 A binary interface will be supported soon.
 
 statusfd updates
@@ -101,7 +105,7 @@ When does supervise exit?
 
 To assure you of the correctness of supervise, know that supervise will exit in these four cases:
 
-- Control and/or status fds for communication were passed in, and they have all closed.
+- A control fd for communications were passed in, and has now closed.
 - All our children are dead.
 - We received a non-SIGKILL fatal signal that was not blocked or ignored when we started.
 - Some believed-to-be-impossible syscall error happened
