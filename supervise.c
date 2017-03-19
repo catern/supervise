@@ -94,7 +94,6 @@ struct options {
     char **exec_argv;
     int controlfd;
     int statusfd;
-    bool should_hang;
 };
 
 struct options
@@ -116,9 +115,6 @@ get_options(int argc, char **argv) {
 	.exec_argv = argv+3,
 	.controlfd = controlfd,
 	.statusfd = statusfd,
-	/* if we don't have a statusfd or controlfd, we should just hang
-	 * around until we get a signal, to be useful on the command line. */
-	.should_hang = opt.controlfd == -1,
     };
     return opt;
 }
@@ -156,16 +152,18 @@ int main(int argc, char **argv) {
 	{ .fd = fatalfd, .events = POLLIN, .revents = 0, },
     };
     for (;;) {
-	if (opt.controlfd == -1 && !opt.should_hang) {
-	    /* We exit if our means of communication with our owner have closed. */
-	    exit(0);
-	}
 	try_(poll(pollfds, 3, -1));
 	if (pollfds[0].revents & POLLIN) read_controlfd(opt.controlfd, main_child_pid);
 	if (pollfds[0].revents & (POLLERR|POLLNVAL|POLLRDHUP|POLLHUP)) {
 	    close(opt.controlfd);
 	    opt.controlfd = -1;
 	    pollfds[0].fd = -1;
+	    /*
+	       If we see our controlfd close, it means our process was wanted at some
+	       time, but no longer. We will stick around until we have finished writing
+	       status messages for killing all our children.
+	    */
+	    filicide();
 	}
 	if (pollfds[1].revents & POLLIN) {
 	    read_childfd(childfd, opt.statusfd, main_child_pid);

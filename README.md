@@ -82,7 +82,8 @@ Follow all commands with a newline.
 
 Furthermore, if supervise reads an EOF/POLLHUP from `controlfd`,
 indicating there are no more fds open which can write to `controlfd`,
-supervise will exit and clean up all its child processes.
+supervise will SIGKILL all its child processes.
+(supervise will exit shortly thereafter after writing the status to statusfd.)
 
 A binary interface will be supported soon.
 
@@ -106,10 +107,11 @@ When does supervise exit?
 
 To assure you of the correctness of supervise, know that supervise will exit in these four cases:
 
-- A control fd for communications were passed in, and has now closed.
 - All our children are dead.
+- A control fd for communications was passed in, and has now closed.
+  This indirectly causes us to exit; first we kill all of our children, and then exit because of that.
 - We received a non-SIGKILL fatal signal that was not blocked or ignored when we started.
-- Some believed-to-be-impossible syscall error happened
+- Some believed-to-be-impossible syscall error happened.
 
 In all of these cases, after we exit, all of our children will be dead.
 (And our communication fds will be closed)
