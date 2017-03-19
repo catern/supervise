@@ -137,6 +137,7 @@ However, sometimes you want to create a process which outlives your own.
 Some example use cases:
 - you are starting up a server which should live past your login session
 - you are starting a new login session which shouldn't be killed just because the login server went down
+
 Such processes are typically referred to as daemons.
 
 Achieving this with supervise requires that the `controlfd` passed to supervise will not get an EOF/POLLHUP after its parent process dies.
@@ -157,6 +158,7 @@ as long as there is at least one reference to that resource.
 A resource, once created, should be destructed if and only if both of these properties are true:
 - there are no more references
 - no more references can be created.
+
 Since (typically) references can only and always be created from existing references,
 those two properties are equivalent in most systems.
 
