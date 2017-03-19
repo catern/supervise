@@ -159,7 +159,8 @@ A resource, once created, should be destructed if and only if both of these prop
 - there are no more references
 - no more references can be created.
 
-Since (typically) references can only and always be created from existing references,
+Since typically references can only be created from existing references,
+and an existing reference can always be used to create more references,
 those two properties are equivalent in most systems.
 
 In effect, supervise implements reference counting for processes,
@@ -172,7 +173,7 @@ For a pipe created with pipe(3),
 we know that a poll(3) on the read side of the file descriptor,
 will return POLLHUP if and only if there are no more references to the write side of the pipe.
 So supervise knows when it gets POLLHUP that there are no more references to the write side of the pipe,
-and it translate this into meaning that there are no more references to the process.
+and it interprets this as meaning that there are no more references to the process.
 So the process should be destructed; that is, killed.
 
 Now we can restate what we want to do:
@@ -185,14 +186,15 @@ is to have a long-lived server which will store file descriptors passed to it an
 In our case, however, there is no need for this.
 We can just use the filesystem!
 
-We can use a fifo (also known as a named pipe) instead of a pipe.
+We can use a fifo created by mkfifo(3), also known as a named pipe, instead of a regular pipe created by pipe(3).
 A fifo is a file visible in the filesystem,
 and is a reference to both the write-side and the read-side of a pipe.
 As long as the fifo exists in the filesystem,
 new write-side file descriptors can be created.
-(Note that a file may exist in the filesystem multiple times,
-and may no longer exist in its original location while still existing somewhere, through rename(3), link(3) or unlink(3))
-So poll(3) should not return POLLHUP when polling on the read-side of a fifo, if that fifo still exists somewhere in the filesystem.
+Note that a file may exist in the filesystem multiple times,
+and may no longer exist in its original location while still existing somewhere, through rename(3), link(3) or unlink(3).
+So as long as the fifo still exists somewhere in the filesystem, possibly under a different name,
+poll(3) should not return POLLHUP when polling on the read-side of a fifo.
 
 Well, due to (what I view as) a design flaw in Unix, that's not true;
 poll(3) will return POLLHUP whenever there are no write-side file descriptors currently open,
@@ -212,13 +214,12 @@ and when the fifo is completely gone from the filesystem,
 the unlinkwait process will exit and the write-side file descriptor it holds will be closed.
 So by using unlinkwait in conjunction with a fifo, we can have the reference counting behavior we desire.
 
-Interestingly,
-if an "flink" system call was added,
-which takes a file descriptor currently not linked in to the filesystem, and a path,
-and creates a new link at that path,
-this logic would no longer be correct.
-(Since link count could increase from 0.)
-In fact I think it would become fundamentally impossible to do this kind of reference counting across the filesystem and file descriptors:
+As an interesting side note,
+if an "flink" system call was added this logic would break down.
+"flink" would take a path, and a file descriptor which currently has a link count of zero,
+and creates a new link to that file descriptor at that path.
+In fact iI think it would become fundamentally impossible in the presence of flink
+to do this kind of reference counting across the filesystem and file descriptors:
 link count and POLLHUP are two pieces of information read from separate interfaces,
 and you would want to destruct your resource when link count is 0 and you are receiving POLLHUP,
 but there's no (existing) way to check both of those atomically.
@@ -229,7 +230,7 @@ How to run a daemon with supervise
 ----------------------------------
 
 You want to run a process that outlasts any individual process,
-while still getting the control and cleanup attributes of supervise.
+while still getting the control and cleanup properties of supervise.
 
 Use the unlinkwait utility in this repository and a fifo as follows,
 adjusting the statusfd if you wish:
@@ -246,7 +247,8 @@ This way supervise will exit (from getting a POLLHUP on the `controlfd`) if and 
 - the fifo (and all hardlinks to it) is removed from the filesystem.
   This is provided by unlinkwait, which is holding a writable fd to the fifo, and exits when the fifo is removed from the filesystem.
 
-Renaming and moving the fifo is fine.
+Renaming and moving the fifo is fine,
+though it should not be moved between filesystems as mv(1) implements that by creating a new copy and deleting the old copy.
 
 In other words, the lifecycle of the daemon is tied to the fifo inode,
 which is something that exists in the filesystem and outlasts any individual process.
