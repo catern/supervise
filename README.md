@@ -108,9 +108,10 @@ When does supervise exit?
 To assure you of the correctness of supervise, know that supervise will exit in these four cases:
 
 - All our children are dead.
-- A control fd for communications was passed in, and has now closed.
+- A `controlfd` was passed in, and has now closed.
   This indirectly causes us to exit; first we kill all of our children, and then exit because of that.
 - We received a non-SIGKILL fatal signal that was not blocked or ignored when we started.
+  This also indirectly causes us to exit, killing all of our children and exiting because of that.
 - Some believed-to-be-impossible syscall error happened.
 
 In all of these cases, after we exit, all of our children will be dead.

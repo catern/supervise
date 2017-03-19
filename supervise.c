@@ -45,13 +45,7 @@ void read_fatalfd(const int fatalfd) {
     while (try_(read(fatalfd, &siginfo, sizeof(siginfo))) == sizeof(siginfo)) {
 	/* explicitly filicide, since dying from a signal won't call exit handlers */
 	filicide();
-	/* allow the signal to be delivered and kill us */
-	const sigset_t singleton = singleton_set(siginfo.ssi_signo);
-	try_(sigprocmask(SIG_UNBLOCK, &singleton, NULL));
-	raise(siginfo.ssi_signo);
-	/* exit just in case it doesn't kill us */
-	warnx("signal %d doesn't seem to have killed us", siginfo.ssi_signo);
-	exit(EXIT_FAILURE);
+	/* we will now exit in read_childfd when we see we have no children left */
     }
 }
 
