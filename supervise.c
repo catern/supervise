@@ -59,6 +59,7 @@ void read_childfd(int childfd, int statusfd, int main_child_pid) {
 	    const int ret = waitid(P_ALL, 0, &childinfo, WEXITED|WNOHANG);
 	    if (ret == -1 && errno == ECHILD) {
 		/* no more children. there's nothing else we can do, so we exit */
+		dprintf(statusfd, "no_children\n");
 		exit(0);
 	    }
 	    /* no child was in a waitable state */
@@ -120,7 +121,11 @@ int main(int argc, char **argv) {
     /* give filicide a trial run to see if we can do it;
      * it's idempotent, so no worries */
     filicide();
-    atexit(filicide);
+    void handle_exit(void) {
+	filicide();
+	dprintf(opt.statusfd, "no_children\n");
+    };
+    atexit(handle_exit);
 
     try_(prctl(PR_SET_CHILD_SUBREAPER, true));
 

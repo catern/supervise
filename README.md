@@ -99,6 +99,7 @@ All messages are followed by a newline.
 - `signaled [signal string] (coredumped)`: The immediate child has terminated due to a signal, and dumped core.
 - `stopped [signal string]`: The immediate child has stopped due to a signal
 - `continued`: The immediate child has continued due to SIGCONT.
+- `no_children`: There are no more children (and therefore no more children can start). supervise will exit immediately after sending this.
 
 A binary interface will be supported soon.
 
