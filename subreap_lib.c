@@ -56,8 +56,22 @@ void build_child_tree_children(char *pid_state, pid_t max_pid) {
     mark_child(getpid());
 }
 
+bool pid_exists(pid_t pid) {
+    int ret = kill(pid, 0);
+    return ret == 0 || (ret == -1 && errno == EPERM);
+}
+
 /* this returns -1 if there is no such pid (or if /proc/ is not available) */
 pid_t get_ppid_of(pid_t pid) {
+    /* Doing this pid_exists check is obviously racy, but it can only lead us to
+     * erroneously return -1. This is the same effect as a process with this pid
+     * being created after we have already done the open(/proc/pid/stat). So
+     * this race is mitigated in the same way, through looping in
+     * signal_all_children.  And in return, we get a big boost to efficiency:
+     * Checking pid_exists is much cheaper for the common case of the pid
+     * doesn't exist.
+     */
+    if (!pid_exists(pid)) return -1;
     char buf[BUFSIZ];
     snprintf(buf, sizeof(buf), "/proc/%d/stat", pid);
     const int statfd _cleanup_close_ = open(buf, O_CLOEXEC|O_RDONLY);
