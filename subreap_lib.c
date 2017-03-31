@@ -13,6 +13,7 @@
 #include "subreap_lib.h"
 #include "common.h"
 
+/* This is at most PID_MAX_LIMIT, which is 2^22, approximately 4 million. */
 pid_t get_maxpid(void) {
     int maxpidfd _cleanup_close_ = try_(open("/proc/sys/kernel/pid_max", O_RDONLY));
     char buf[64] = {};
@@ -139,6 +140,7 @@ void build_child_tree(char *pid_state, const pid_t max_pid) {
 void signal_all_children(const int signum) {
     const pid_t max_pid = get_maxpid();
     const pid_t mypid = getpid();
+    /* These are at most 4MB large each, see PID_MAX_LIMIT and get_maxpid(). */
     char pid_state[max_pid];
     bool already_signaled[max_pid];
     memset(already_signaled, false, max_pid);
