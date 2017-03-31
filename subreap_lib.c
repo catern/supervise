@@ -30,12 +30,19 @@ enum pid_state {
     PID_UNRELATED,
 };
 
-/* Only available on some kernels. */
+/* Only available on some kernels. Generally available on >4.2. See proc(5). */
 FILE *get_children_stream(pid_t pid) {
     char buf[1024];
     snprintf(buf, sizeof(buf), "/proc/%d/task/%d/children", pid, pid);
     return fopen(buf, "re");
 }
+/* Note that this allows us to avoid iterating over all pids, at least when
+ * building the child tree. Some people are concerned that
+ * build_child_tree_stat, which could have to process 4 million pids at worst,
+ * is too slow. I am not really concerned about that - who cares if it's slow,
+ * since it works? - but build_child_tree_children could be a solution for them
+ * on modern kernels.
+ */
 
 /* Build a child tree, using the /proc/pid/task/tid/children
  * file. This should be faster than iterating over all pids, but it's
