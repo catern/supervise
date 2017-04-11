@@ -7,10 +7,9 @@ supervise is designed to be used as a wrapper for child processes you execute.
 Therefore supervise is designed to only wake up when there is an event to be handled,
 and it otherwise consumes no CPU time.
 
-There are four main benefits of using supervise to wrap child processes:
+There are three main benefits of using supervise to wrap child processes:
 
 - The ability to get notified of child process exit or status change through a file descriptor interface
-- The ability to send a signal to all the transitive children of a child process
 - Automatic termination of your child processes when you exit (by virtue of the fd interface)
 - Guaranteed termination of all the transitive children of a child
   process; no possibility of orphans lingering on the system
@@ -28,8 +27,8 @@ the `controlfd` and the `statusfd`
 (in most use cases these will be the same fd),
 as well as waiting for the immediate child process to change state.
 
-supervise reads `signal` or `signal_all` commands from `controlfd`,
-which respectively command supervise to send a given signal to the immediate child process or to all of supervise's transitive children.
+supervise reads `signal` commands from `controlfd`,
+which command supervise to send a given signal to the immediate child process.
 
 If supervise receives a POLLHUP on the `controlfd`, it will exit.
 So if you fork off a child and wrap it with supervise,
@@ -78,7 +77,6 @@ Write the following commands to `controlfd` to have the corresponding effect.
 Follow all commands with a newline.
 
 - `signal [signum]`: Send signal number `signum` to the immediate child
-- `signal_all [signum]`: Send signal number `signum` to all transitive children
 
 Furthermore, if supervise reads an EOF/POLLHUP from `controlfd`,
 indicating there are no more fds open which can write to `controlfd`,
