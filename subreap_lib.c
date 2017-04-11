@@ -21,47 +21,14 @@ pid_t get_maxpid(void) {
     return str_to_int(buf);
 }
 
-enum pid_state {
-    /* we haven't checked this pid's parent yet */
-    PID_UNCHECKED = 0,
-    /* this pid is descended from us */
-    PID_DESCENDED,
-    /* this pid not descended from us */
-    PID_UNRELATED,
-};
-
-/* Only available on some kernels. Generally available on >4.2. See proc(5). */
+/* Only available on some kernels. Generally available on >4.2. See proc(5).
+ * It could be faster than iterating over all pids, though its interaction with
+ * more children showing up mid-read is undefined.
+ */
 FILE *get_children_stream(pid_t pid) {
     char buf[1024];
     snprintf(buf, sizeof(buf), "/proc/%d/task/%d/children", pid, pid);
     return fopen(buf, "re");
-}
-/* Note that this allows us to avoid iterating over all pids, at least when
- * building the child tree. Some people are concerned that
- * build_child_tree_stat, which could have to process 4 million pids at worst,
- * is too slow. I am not really concerned about that - who cares if it's slow,
- * since it works? - but build_child_tree_children could be a solution for them
- * on modern kernels.
- */
-
-/* Build a child tree, using the /proc/pid/task/tid/children
- * file. This should be faster than iterating over all pids, but it's
- * racy in the same way. */
-void build_child_tree_children(char *pid_state, pid_t max_pid) {
-    memset(pid_state, PID_UNRELATED, max_pid);
-    /* TOOD this is wrong, we need to iterate over all tids */
-    void mark_child(pid_t pid) {
-	FILE *children _cleanup_fclose_ = get_children_stream(pid);
-	/* we assume that if we can't open its children file, this
-	 * process doesn't exist */
-	if (children == NULL) return;
-	pid_state[pid] = PID_DESCENDED;
-	pid_t child;
-	while (fscanf(children, "%d", &child) > 0) {
-	    mark_child(child);
-	}
-    }
-    mark_child(getpid());
 }
 
 bool pid_exists(pid_t pid) {
@@ -70,14 +37,14 @@ bool pid_exists(pid_t pid) {
 }
 
 /* this returns -1 if there is no such pid (or if /proc/ is not available) */
-pid_t get_ppid_of(pid_t pid) {
+pid_t ppid_of(pid_t pid) {
     /* Doing this pid_exists check is obviously racy, but it can only lead us to
      * erroneously return -1. This is the same effect as a process with this pid
-     * being created after we have already done the open(/proc/pid/stat). So
-     * this race is mitigated in the same way, through looping in
-     * signal_all_children.  And in return, we get a big boost to efficiency:
+     * being created after we have already done the open(/proc/pid/stat). And
+     * this race is mitigated in the same way, through looping outside here.
+     * And in return, we get a big boost to efficiency:
      * Checking pid_exists is much cheaper for the common case of the pid
-     * doesn't exist.
+     * not existing.
      */
     if (!pid_exists(pid)) return -1;
     char buf[BUFSIZ];
@@ -98,92 +65,56 @@ pid_t get_ppid_of(pid_t pid) {
     return str_to_int(after_command + skip_to_ppid);
 }
 
-/* This is racy because a process could fork and create a new process
- * with a pid we already checked. However, we can solve the race by
- * calling this in a loop.
- */
-void build_child_tree_stat(char *pid_state, const pid_t max_pid) {
-    memset(pid_state, PID_UNCHECKED, max_pid);
-    /* we are descended from ourselves */
-    pid_state[getpid()] = PID_DESCENDED;
-    /* init is not descended from us */
-    pid_state[1] = PID_UNRELATED;
-    /* neither is the kernel */
-    pid_state[0] = PID_UNRELATED;
-    char check(const pid_t pid) {
-	if (pid < 0) return PID_UNRELATED;
-	if (pid_state[pid] == PID_UNCHECKED) {
-	    /* a pid's descended-status is the same as its parent */
-	    const pid_t parent = get_ppid_of(pid);
-	    pid_state[pid] = check(parent);
-	}
-	return pid_state[pid];
-    }
+/* this waits for a pid to die; it must be our child and must not have been
+ * collected before; it leaves the zombie behind, uncollected. */
+void wait_for_death(pid_t pid) {
+    siginfo_t childinfo;
+    try_(waitid(P_PID, pid, &childinfo, WEXITED|WNOWAIT));
+}
+
+/* returns true if it killed any children */
+/* takes a bitset of dead child pids, and sets in it any new children killed */
+bool kill_children(bool *dead, const pid_t max_pid) {
+    bool killed = false;
+    /* this is pretty efficient because children have a higher pid than their
+     * parents (module pid wraps), so iterating over all pids is equivalent to
+     * just walking the tree. */
+    /* pid wraps are dealt with by calling this function in a loop */
     for (pid_t pid = 1; pid < max_pid; pid++) {
-	check(pid);
+	/* already killed */
+	if (dead[pid]) continue;
+	/* not our child or nonexistent */
+	if (ppid_of(pid) != getpid()) continue;
+	/* this cannot fail. if we're here, this pid is an immediate child of
+	 * us, and even if it already exited, it's still a zombie because we
+	 * haven't collected it. */
+	try_(kill(pid, SIGKILL));
+	/* once pid is dead, all its children are reparented to us, and we will
+	 * see them on the next iteration. but if we don't wait for it to die,
+	 * we might exit before it gets SIGKILL and its children are reparented. */
+	wait_for_death(pid);
+	dead[max_pid] = true;
+	killed = true;
     }
+    return killed;
 }
 
-bool check_for_stat() {
-    /* if we can't look up our own ppid, /proc/pid/stat is unavailable */
-    return get_ppid_of(getpid()) != -1;
-}
-
-/* check if various interfaces are available and use the fastest */
-void build_child_tree(char *pid_state, const pid_t max_pid) {
-    /* this is the only method we support for now */
-    if (check_for_stat()) {
-	return build_child_tree_stat(pid_state, max_pid);
-    } else {
-	errx(1, "No method to build_child_tree is available");
-    }
-}
-
-/* This signals each pid at most once, so it will halt. pid reuse
- * attacks are prevented by CHILD_SUBREAPER; we are choosing to not
- * collect children while in this function.  A malicious child (with
- * perfect timing) can at worst force us to loop max_pid times.
- */
-void signal_all_children(const int signum) {
-    const pid_t max_pid = get_maxpid();
-    const pid_t mypid = getpid();
-    /* These are at most 4MB large each, see PID_MAX_LIMIT and get_maxpid(). */
-    char pid_state[max_pid];
-    bool already_signaled[max_pid];
-    memset(already_signaled, false, max_pid);
-
-    bool maybe_more_to_signal = true;
-    /* while there might be some child left unsignaled: */
-    while (maybe_more_to_signal) {
-	/* build a tree of all children */
-	build_child_tree(pid_state, max_pid);
-	/* optimistically assume there won't be any children to signal this time */
-	maybe_more_to_signal = false;
-	/* signal all the children, skipping ones already signaled */
-	for (pid_t pid = 1; pid < max_pid; pid++) {
-	    if (pid_state[pid] == PID_DESCENDED && pid != mypid && !already_signaled[pid]) {
-		warnx("killing %d with %d", pid, signum);
-		/* the kill can't fail. this pid must existed since it
-		 * was marked as a descendent, and if it exited it's
-		 * still a zombie */
-		try_(kill(pid, signum));
-		already_signaled[pid] = true;
-		/* if we signaled something new, it could have forked and we missed its
-		 * child when building the tree. so there's maybe more to signal */
-		maybe_more_to_signal = true;
-	    }
-	}
-    }
+void kill_all_children(void) {
+    const pid_t maxpid = get_maxpid();
+    /* This is at most 4MB large, see PID_MAX_LIMIT and get_maxpid(). */
+    bool dead[maxpid];
+    memset(dead, false, sizeof(dead));
+    /* keep killing children until there are no more to kill */
+    while (kill_children(dead, maxpid));
+    /* We will call kill_children at most max_pid times,
+     * since we will kill each pid at most once. */
+    /* (In the typical case we'll call it twice) */
 }
 
 /* On return, we guarantee that the current process has no more children. */
 void filicide(void) {
-    signal_all_children(SIGKILL);
+    kill_all_children();
 }
-/* Another possible implementation of filicide is to iterate over our
- * current children and kill them, and repeat until we don't see any
- * more living children. That would avoid any tree-building, but it
- * can only work for sending SIGKILL. */
 
 const int deathsigs[] = {
     /* signals making us terminate */

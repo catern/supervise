@@ -22,9 +22,17 @@ void handle_command(const char *command, const int main_child_pid) {
 	if (main_child_pid != -1) {
 	    try_(kill(main_child_pid, signal));
 	}
-    } else if (sscanf(command, "signal_all %u\n", &signal) == 1) {
-	signal_all_children(signal);
     }
+    /* I can also safely send signals to all my immediate children.
+     * (of which I might have multiple, if something tried to daemonize)
+     * I don't see a use for that at the moment, though.
+     */
+    /* I cannot safely send a signal to all transitive children,
+     * except for SIGKILL.  My children can always race against me and
+     * trick me into signalling the wrong process through pid wrap
+     * attacks, because I can't be sure that the process behind a pid
+     * doesn't change.
+     */
 }
 
 void read_controlfd(const int controlfd, const int main_child_pid) {
@@ -33,7 +41,7 @@ void read_controlfd(const int controlfd, const int main_child_pid) {
     while ((size = try_(read(controlfd, &buf, sizeof(buf)-1))) > 0) {
 	buf[size] = '\0';
 	/* BUG we assume we get full lines, one line at a time */
-	/* (that's not as dangerous as it might seem due to pipe atomicity) */
+	/* (that's not as dangerous as it might seem though due to pipe atomicity) */
 	handle_command(buf, main_child_pid);
 	memset(buf, 0, sizeof(buf));
     }
