@@ -12,7 +12,8 @@
 int try_function(const int ret,
 		 const char *file, const int line, const char *function, const char *program)
 {
-    if (ret < 0 && errno != EAGAIN) {
+    /* EAGAIN and ECONNRESET are both detected through poll() for us */
+    if (ret < 0 && errno != EAGAIN && errno != ECONNRESET) {
 	warn("%s:%d %s: Failed to %s", file, line, function, program);
 	exit(1);
     }
