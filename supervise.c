@@ -74,13 +74,9 @@ void read_childfd(int childfd, int statusfd, int main_child_pid) {
 	    if (childinfo.si_code == CLD_EXITED) {
 		dprintf(statusfd, "exited %d\n", childinfo.si_status);
 	    } else if (childinfo.si_code == CLD_KILLED) {
-		dprintf(statusfd, "signaled %d\n", childinfo.si_status);
+		dprintf(statusfd, "killed %d\n", childinfo.si_status);
 	    } else if (childinfo.si_code == CLD_DUMPED) {
-		dprintf(statusfd, "signaled %d (coredumped)\n", childinfo.si_status);
-	    } else if (childinfo.si_code == CLD_STOPPED) {
-		dprintf(statusfd, "stopped %d\n", childinfo.si_status);
-	    } else if (childinfo.si_code == CLD_CONTINUED) {
-		dprintf(statusfd, "continued\n");
+		dprintf(statusfd, "dumped %d\n", childinfo.si_status);
 	    }
 	}
     }

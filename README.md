@@ -93,10 +93,8 @@ All messages are followed by a newline.
 
 - `pid [pid number]`: We have forked off the immediate child, and this is its pid.
 - `exited [status code]`: The immediate child has exited
-- `signaled [signal string]`: The immediate child has terminated due to a signal.
-- `signaled [signal string] (coredumped)`: The immediate child has terminated due to a signal, and dumped core.
-- `stopped [signal string]`: The immediate child has stopped due to a signal
-- `continued`: The immediate child has continued due to SIGCONT.
+- `killed [signal number]`: The immediate child has terminated due to a signal.
+- `dumped [signal number]`: The immediate child has terminated due to a signal, and dumped core.
 - `no_children`: There are no more children (and therefore no more children can start). (supervise will exit, sending `terminating`, promptly after this message.)
 - `terminating`: We have just filicided and will now exit.
 
