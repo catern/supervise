@@ -125,7 +125,7 @@ int main(int argc, char **argv) {
     filicide();
     void handle_exit(void) {
 	filicide();
-	dprintf(opt.statusfd, "no_children\n");
+	dprintf(opt.statusfd, "terminating\n");
     };
     atexit(handle_exit);
 
