@@ -33,7 +33,15 @@ sigset_t get_blocked_signals() {
     return original_blocked_signals;
 }
 
+void exit_on_signal(int signal) {
+    (void)signal;
+    exit(1);
+}
+
 int get_childfd(void) {
+    struct sigaction sa = {};
+    sa.sa_handler = exit_on_signal;
+    try_(sigaction(SIGCHLD, &sa, NULL));
     const sigset_t childsig = singleton_set(SIGCHLD);
     try_(sigprocmask(SIG_BLOCK, &childsig, NULL));
     const int childfd = try_(signalfd(-1, &childsig, SFD_NONBLOCK|SFD_CLOEXEC));
