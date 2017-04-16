@@ -43,7 +43,7 @@ int get_childfd(void) {
 void disable_sigpipe(void) {
     struct sigaction sa = {};
     sa.sa_handler = SIG_IGN;
-    sigaction(SIGPIPE, &sa, NULL);
+    try_(sigaction(SIGPIPE, &sa, NULL));
 }
 
 void make_fd_cloexec_nonblock(const int fd) {
