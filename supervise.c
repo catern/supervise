@@ -128,6 +128,8 @@ int main(int argc, char **argv) {
     try_(prctl(PR_SET_CHILD_SUBREAPER, true));
 
     const sigset_t original_blocked_signals = get_blocked_signals();
+    /* We use signalfds for signal handling. Among other benefits,
+     * this means we don't need to worry about EINTR. */
     const int fatalfd = get_fatalfd();
     const int childfd = get_childfd();
 
