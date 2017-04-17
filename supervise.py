@@ -6,10 +6,38 @@ supervise utility.
 import fcntl
 import os
 import socket
-import distutils.spawn
+import shutil
 import select
 import signal
 import errno
+
+# Python2 doesn't have os.O_CLOEXEC
+try:
+    O_CLOEXEC=os.O_CLOEXEC
+except:
+    O_CLOEXEC=02000000
+# ...or os.set_inheritable
+try:
+    set_inheritable=os.set_inheritable
+except:
+    def set_inheritable(fd, inheritable):
+        flags = fcntl.fcntl(fd, fcntl.F_GETFD)
+        if inheritable:
+            newflags = flags & ~fcntl.FD_CLOEXEC
+        else:
+            newflags = flags | fcntl.FD_CLOEXEC
+        fcntl.fcntl(fd, fcntl.F_SETFD, newflags)
+# ...or shutil.which
+try:
+    which = shutil.which
+    def is_on_path(binname, path):
+        return which(binname, path=path)
+except:
+    def is_on_path(binname, path):
+        for bindir in path.split(":"):
+            if os.access("{}/{}".format(bindir, binname), os.F_OK|os.X_OK):
+                return True
+        return False
 
 def ignore_sigchld():
     """Mark SIGCHLD as SIG_IGN. Doing this explicitly prevents zombies."""
@@ -103,7 +131,7 @@ def update_fds(fds):
         for copy in copied_sources.values():
             os.close(copy)
 
-def dfork(args, *, env={}, fds={}, cwd=None, flags=os.O_CLOEXEC):
+def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
     """Create an fd-managed process, and return the fd.
 
     See the documentation of the "supervise" utility for usage of the
@@ -161,11 +189,11 @@ def dfork(args, *, env={}, fds={}, cwd=None, flags=os.O_CLOEXEC):
         val = fds[fd]
         if not isinstance(val, str) and not getattr(val, "fileno"):
             raise TypeError("fds key is not an int and has no fileno() method: {}".format(val))
-    if not distutils.spawn.find_executable("supervise", path=env.get("PATH") or os.environ["PATH"]):
+    if not is_on_path("supervise", path=env.get("PATH") or os.environ["PATH"]):
         raise ValueError("supervise utility not found in path")
 
     parent_side, child_side = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET|flags, 0)
-    os.set_inheritable(child_side.fileno(), True)
+    set_inheritable(child_side.fileno(), True)
     commfd = str(child_side.fileno())
     realargs = ["supervise", commfd, commfd] + args
     try:
@@ -229,7 +257,7 @@ class Process(object):
 
     def closed(self):
         """Returns true if supervise communication fd is closed."""
-        return self.fd._closed
+        return self.fd.fileno() == -1
 
     def fileno(self):
         """Return supervise communication fd, or -1 if closed."""
@@ -251,6 +279,11 @@ class Process(object):
             buf = self.fd.recv(4096)
             return buf
         except OSError as e:
+            if e.errno == errno.EAGAIN:
+                return None
+            else:
+                raise
+        except socket.error as e:
             if e.errno == errno.EAGAIN:
                 return None
             else:
