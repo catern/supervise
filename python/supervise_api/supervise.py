@@ -15,7 +15,7 @@ import errno
 try:
     O_CLOEXEC=os.O_CLOEXEC
 except:
-    O_CLOEXEC=02000000
+    O_CLOEXEC=0o2000000
 # ...or os.set_inheritable
 try:
     set_inheritable=os.set_inheritable
@@ -74,8 +74,11 @@ def update_fds(fds):
     # copy fds, turning everything to a raw integer fd
     orig_fds = fds
     fds = {}
+    to_close = []
     for target in orig_fds:
-        if isinstance(orig_fds[target], int):
+        if orig_fds[target] is None:
+            to_close.append(target)
+        elif isinstance(orig_fds[target], int):
             fds[target] = orig_fds[target]
         else:
             fds[target] = orig_fds[target].fileno()
@@ -131,6 +134,9 @@ def update_fds(fds):
         for copy in copied_sources.values():
             os.close(copy)
 
+    for target in to_close:
+        os.close(target)
+
 def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
     """Create an fd-managed process, and return the fd.
 
@@ -183,12 +189,14 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
             raise TypeError("env key is not a string: {}".format(var))
         if not isinstance(env[var], str):
             raise TypeError("env value is not a string: {}".format(env[var]))
+    def good_fd(fd):
+        return fd is None or isinstance(fd, int) or hasattr(fd, "fileno")
     for fd in fds:
-        if not isinstance(fd, str) and not getattr(fd, "fileno"):
-            raise TypeError("fds key is not an int and has no fileno() method: {}".format(fd))
+        if not isinstance(fd, int):
+            raise TypeError("fds key is not an int: {}".format(fd))
         val = fds[fd]
-        if not isinstance(val, str) and not getattr(val, "fileno"):
-            raise TypeError("fds key is not an int and has no fileno() method: {}".format(val))
+        if not good_fd(val):
+            raise TypeError("fds val is not None or an int and has no fileno() method: {}".format(val))
     if not is_on_path("supervise", path=env.get("PATH") or os.environ["PATH"]):
         raise ValueError("supervise utility not found in path")
 
