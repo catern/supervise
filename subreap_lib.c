@@ -77,7 +77,7 @@ void wait_for_death(pid_t pid) {
 bool kill_children(bool *dead, const pid_t max_pid) {
     bool killed = false;
     /* this is pretty efficient because children have a higher pid than their
-     * parents (module pid wraps), so iterating over all pids is equivalent to
+     * parents (modulo pid wraps), so iterating over all pids is equivalent to
      * just walking the tree. */
     /* pid wraps are dealt with by calling this function in a loop */
     for (pid_t pid = 1; pid < max_pid; pid++) {

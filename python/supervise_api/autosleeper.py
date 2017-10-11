@@ -1,4 +1,4 @@
-"""A smell demo of supervise."""
+"""A small demo of supervise."""
 import supervise
 import select
 import linuxfd
