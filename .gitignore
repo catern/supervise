@@ -1,5 +1,5 @@
-/supervise
-/unlinkwait
+/src/supervise
+/src/unlinkwait
 *.pyc
 
 # Setuptools distribution folder.
@@ -7,3 +7,20 @@
 
 # Python egg metadata, regenerated from source files by setuptools.
 /python/*.egg-info
+*.o
+*.a
+*.in
+/autom4te.cache
+/stamp-h1
+/src/Makefile
+/depcomp
+/install-sh
+/missing
+/configure
+/config.log
+/config.status
+/config.h
+/aclocal.m4
+/compile
+/Makefile
+/ar-lib
