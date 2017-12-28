@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(name='supervise_api',
-      version='0.1.5',
+      version='0.2.0',
       description='An API for running processes safely and securely',
       long_description=("This package uses the supervise utility, a separately-available C binary,"
                         " to provide a better process API for Linux."),
