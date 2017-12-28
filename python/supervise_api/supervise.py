@@ -30,14 +30,13 @@ except:
 # ...or shutil.which
 try:
     which = shutil.which
-    def is_on_path(binname, path):
-        return which(binname, path=path)
 except:
-    def is_on_path(binname, path):
-        for bindir in path.split(":"):
-            if os.access("{}/{}".format(bindir, binname), os.F_OK|os.X_OK):
-                return True
-        return False
+    from whichcraft import which
+
+supervise_utility_location = which("supervise")
+if not supervise_utility_location:
+    raise FileNotFoundError(errno.ENOENT, "Executable not found in PATH", "supervise")
+
 
 def ignore_sigchld():
     """Mark SIGCHLD as SIG_IGN. Doing this explicitly prevents zombies."""
@@ -197,13 +196,15 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
         val = fds[fd]
         if not good_fd(val):
             raise TypeError("fds val is not None or an int and has no fileno() method: {}".format(val))
-    if not is_on_path("supervise", path=env.get("PATH") or os.environ["PATH"]):
-        raise ValueError("supervise utility not found in path")
+    executable = which(args[0], path=env.get("PATH", os.environ["PATH"]))
+    if not executable:
+        raise FileNotFoundError(errno.ENOENT, "Executable not found in PATH", args[0])
+    args[0] = executable
 
     parent_side, child_side = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET|flags, 0)
     set_inheritable(child_side.fileno(), True)
     commfd = str(child_side.fileno())
-    realargs = ["supervise", commfd, commfd] + args
+    realargs = [supervise_utility_location, commfd, commfd] + args
     try:
         ret = os.fork()
     except:
