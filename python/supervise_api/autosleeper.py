@@ -1,5 +1,5 @@
 """A small demo of supervise."""
-import supervise
+import supervise_api
 import select
 import linuxfd
 import time
