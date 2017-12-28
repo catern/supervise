@@ -118,7 +118,7 @@ int main(int argc, char **argv) {
 
     /* give filicide a trial run to see if we can do it;
      * it's idempotent, so no worries */
-    filicide();
+    trial_filicide();
     void handle_exit(void) {
 	filicide();
 	dprintf(opt.statusfd, "terminating\n");
