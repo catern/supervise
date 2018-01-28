@@ -66,6 +66,10 @@ def update_fds(fds):
     are certainly not closed by brute force. If you want them to be
     closed, mark them CLOEXEC!
 
+    This performs updates using dup2. Note that file descriptor flags
+    such as CLOEXEC are not copied over by dup2, so the new/updated
+    file descriptors will all be inherited.
+
     :param fds:
         A dictionary of updates to be performed, mapping targets to sources.
         These are all done "simultaneously", so to redirect two file
