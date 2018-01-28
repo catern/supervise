@@ -2,6 +2,7 @@ from unittest import TestCase
 import os
 
 import supervise_api
+import pathlib
 
 class TestSupervise(TestCase):
     def test_basics(self):
@@ -20,6 +21,13 @@ class TestSupervise(TestCase):
     def test_relpath(self):
         sh_relpath = os.path.relpath(supervise_api.which("sh"))
         proc = supervise_api.Process([sh_relpath, "-c", "true"])
+        proc.kill()
+        proc.wait()
+        proc.close()
+
+    def test_pathlib_Path(self):
+        sh_path = pathlib.Path(supervise_api.which("sh"))
+        proc = supervise_api.Process([sh_path, "-c", "true"])
         proc.kill()
         proc.wait()
         proc.close()

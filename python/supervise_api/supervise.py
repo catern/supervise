@@ -27,6 +27,14 @@ except:
         else:
             newflags = flags | fcntl.FD_CLOEXEC
         fcntl.fcntl(fd, fcntl.F_SETFD, newflags)
+# ...or os.fspath
+try:
+    fspath = os.fspath
+except:
+    def fspath(path):
+        if isinstance(path, (str, bytes)):
+            return path
+        raise TypeError("expected str or bytes, not " + type(path).__name__)
 # ...or shutil.which
 try:
     which = shutil.which
@@ -152,7 +160,7 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
         Arguments to execute. The first should point to an executable
         locatable by execvp, possible with the updated PATH and cwd
         specified by the env and cwd parameters.
-    :type args: ``[str]``
+    :type args: ``[PathLike or str or bytes]``
 
     :param env:
         A dictionary of updates to be performed to the
@@ -166,7 +174,7 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
 
     :param cwd:
         The working directory to change to.
-    :type cwd: ``str``
+    :type cwd: ``PathLike or str or bytes``
 
     :param flags:
         Additional flags to set on the fd. Linux supports O_CLOEXEC, O_NONBLOCK.
@@ -177,12 +185,9 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
     """
 
     # validate arguments so we don't spuriously call fork
-    for arg in args:
-        if not isinstance(arg, str):
-            raise TypeError("arg must be a string: {}".format(arg))
-    if cwd and not isinstance(cwd, str):
-        # pathlib is python3 only
-        raise TypeError("cwd must be a string: {}".format(cwd))
+    args = [fspath(arg) for arg in args]
+    if cwd:
+        cwd = fspath(cwd)
     for var in env:
         if not isinstance(var, str):
             raise TypeError("env key is not a string: {}".format(var))
