@@ -92,7 +92,6 @@ bool kill_children(bool *dead, const pid_t max_pid) {
 	/* once pid is dead, all its children are reparented to us, and we will
 	 * see them on the next iteration. but if we don't wait for it to die,
 	 * we might exit before it gets SIGKILL and its children are reparented. */
-	warnx("killing %d", pid);
 	wait_for_death(pid);
 	dead[pid] = true;
 	killed = true;
