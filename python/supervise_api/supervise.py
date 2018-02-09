@@ -219,6 +219,9 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
         if source_fd is None:
             continue
         fd_fileno = fileno(source_fd)
+        # test that all file descriptors are open
+        if not is_valid_fd(fd_fileno):
+            raise ValueError("fds[{}] file is closed: {}".format(fd, source_fd))
     executable = which(args[0], path=env.get("PATH", os.environ["PATH"]))
     if not executable:
         raise FileNotFoundError(errno.ENOENT, "Executable not found in PATH", args[0])
