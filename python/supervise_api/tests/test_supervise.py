@@ -36,6 +36,13 @@ class TestSupervise(TestCase):
         with self.assertRaises(FileNotFoundError):
             supervise_api.Process(["supervise_api_nonexistent_executable_aosije"])
 
+    def test_fds(self):
+        with open("/dev/null") as devnull:
+            proc = supervise_api.Process(["sh", "-c", "true"], fds={0: devnull})
+        proc.kill()
+        proc.wait()
+        proc.close()
+
 if __name__ == '__main__':
     import unittest
     unittest.main()

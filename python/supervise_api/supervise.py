@@ -50,6 +50,23 @@ def ignore_sigchld():
     """Mark SIGCHLD as SIG_IGN. Doing this explicitly prevents zombies."""
     signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 
+def fileno(fil):
+    """Return the file descriptor representation of the file.
+
+    If int is passed in, it is returned unchanged. Otherwise fileno()
+    is called and its value is returned as long as it is an int
+    object. In all other cases, TypeError is raised.
+
+    """
+    if isinstance(fil, int):
+        return fil
+    elif hasattr(fil, "fileno"):
+        fileno = fil.fileno()
+        if not isinstance(fileno, int):
+            raise TypeError("expected fileno to return an int, not " + type(fileno).__name__)
+        return fileno
+    raise TypeError("expected int or an object with a fileno() method, not " + type(fil).__name__)
+
 def is_valid_fd(fd):
     """Check whether the passed in fd is open"""
     try:
@@ -89,10 +106,8 @@ def update_fds(fds):
     for target in orig_fds:
         if orig_fds[target] is None:
             to_close.append(target)
-        elif isinstance(orig_fds[target], int):
-            fds[target] = orig_fds[target]
         else:
-            fds[target] = orig_fds[target].fileno()
+            fds[target] = fileno(orig_fds[target])
 
     ## Actual work
     devnull = None
@@ -197,14 +212,13 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
             raise TypeError("env key is not a string: {}".format(var))
         if not isinstance(env[var], str):
             raise TypeError("env value is not a string: {}".format(env[var]))
-    def good_fd(fd):
-        return fd is None or isinstance(fd, int) or hasattr(fd, "fileno")
     for fd in fds:
         if not isinstance(fd, int):
             raise TypeError("fds key is not an int: {}".format(fd))
-        val = fds[fd]
-        if not good_fd(val):
-            raise TypeError("fds val is not None or an int and has no fileno() method: {}".format(val))
+        source_fd = fds[fd]
+        if source_fd is None:
+            continue
+        fd_fileno = fileno(source_fd)
     executable = which(args[0], path=env.get("PATH", os.environ["PATH"]))
     if not executable:
         raise FileNotFoundError(errno.ENOENT, "Executable not found in PATH", args[0])
