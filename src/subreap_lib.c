@@ -51,10 +51,15 @@ pid_t ppid_of(pid_t pid) {
     snprintf(buf, sizeof(buf), "/proc/%d/stat", pid);
     const int statfd _cleanup_close_ = open(buf, O_CLOEXEC|O_RDONLY);
     if (statfd < 0) {
-	if (errno == ENOENT) return -1;
+	if (errno == ENOENT || errno == ESRCH) return -1;
 	err(1, "Failed to open(%s, O_CLOEXEC|O_RDONLY)", buf);
     }
-    buf[try_(read(statfd, buf, sizeof(buf)))] = '\0';
+    int ret = read(statfd, buf, sizeof(buf));
+    if (ret < 0) {
+	if (errno == ENOENT || errno == ESRCH) return -1;
+	err(1, "Failed to read(<opened %s>, buf, sizeof(buf))", buf);
+    }
+    buf[ret] = '\0';
     /* the command string could have arbitrary characters in it, but
      * it ends with ')', so search for the last ')' in the buffer. */
     char *after_command = strrchr(buf, ')');
