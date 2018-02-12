@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <errno.h>
+#include <syscall.h>
 #include "subreap_lib.h"
 #include "common.h"
 
@@ -106,7 +107,8 @@ bool kill_children(bool *dead, const pid_t max_pid, const pid_t mypid) {
 
 void kill_all_children(void) {
     const pid_t maxpid = get_maxpid();
-    const pid_t mypid = getpid();
+    /* get my pid, bypassing glibc pid cache */
+    const pid_t mypid = syscall(SYS_getpid);
     /* This is at most 4MB large, see PID_MAX_LIMIT and get_maxpid(). */
     bool dead[maxpid];
     memset(dead, false, sizeof(dead));
@@ -118,7 +120,7 @@ void kill_all_children(void) {
 }
 
 void kill_children_up_to(const pid_t maxpid) {
-    const pid_t mypid = getpid();
+    const pid_t mypid = syscall(SYS_getpid);
     bool dead[maxpid];
     memset(dead, false, sizeof(dead));
     while (kill_children(dead, maxpid, mypid));
