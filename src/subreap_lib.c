@@ -79,7 +79,7 @@ void wait_for_death(pid_t pid) {
 
 /* returns true if it killed any children */
 /* takes a bitset of dead child pids, and sets in it any new children killed */
-bool kill_children(bool *dead, const pid_t max_pid) {
+bool kill_children(bool *dead, const pid_t max_pid, const pid_t mypid) {
     bool killed = false;
     /* this is pretty efficient because children have a higher pid than their
      * parents (modulo pid wraps), so iterating over all pids is equivalent to
@@ -89,7 +89,7 @@ bool kill_children(bool *dead, const pid_t max_pid) {
 	/* already killed */
 	if (dead[pid]) continue;
 	/* not our child or nonexistent */
-	if (ppid_of(pid) != getpid()) continue;
+	if (ppid_of(pid) != mypid) continue;
 	/* this cannot fail. if we're here, this pid is an immediate child of
 	 * us, and even if it already exited, it's still a zombie because we
 	 * haven't collected it. */
@@ -106,20 +106,22 @@ bool kill_children(bool *dead, const pid_t max_pid) {
 
 void kill_all_children(void) {
     const pid_t maxpid = get_maxpid();
+    const pid_t mypid = getpid();
     /* This is at most 4MB large, see PID_MAX_LIMIT and get_maxpid(). */
     bool dead[maxpid];
     memset(dead, false, sizeof(dead));
     /* keep killing children until there are no more to kill */
-    while (kill_children(dead, maxpid));
+    while (kill_children(dead, maxpid, mypid));
     /* We will call kill_children at most max_pid times,
      * since we will kill each pid at most once. */
     /* (In the typical case we'll call it twice) */
 }
 
 void kill_children_up_to(const pid_t maxpid) {
+    const pid_t mypid = getpid();
     bool dead[maxpid];
     memset(dead, false, sizeof(dead));
-    while (kill_children(dead, maxpid));
+    while (kill_children(dead, maxpid, mypid));
 }
 
 /* On return, we guarantee that the current process has no more children. */
