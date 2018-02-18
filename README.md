@@ -102,6 +102,15 @@ All messages are followed by a newline.
 
 A binary interface will be supported soon.
 
+Why a plain text interface?
+---------------------------
+
+Aren't plain text interfaces bad?
+
+Not in this case.
+It's simple to understand, simple to debug, and simple to manually use.
+It only loses on efficiency, which is fine, because process manipulation is a rare operation.
+
 When does supervise exit?
 =========================
 
