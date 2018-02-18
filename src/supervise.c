@@ -34,8 +34,10 @@ void read_controlfd(const int controlfd, const pid_t main_child_pid) {
     char buf[4096] = {};
     while ((size = try_(read(controlfd, &buf, sizeof(buf)-1))) > 0) {
 	buf[size] = '\0';
-	/* BUG we assume we get full lines, one line at a time */
-	/* (that's not as dangerous as it might seem though due to pipe atomicity) */
+	/* NOTE we assume we get full lines, one line per read. This
+	 * is fine as long as we're using a transport which preserves
+	 * message boundaries, such as O_DIRECT pipes or SEQPACKET
+	 * Unix sockets. */
 	handle_command(buf, main_child_pid);
 	memset(buf, 0, sizeof(buf));
     }

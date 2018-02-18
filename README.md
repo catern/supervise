@@ -62,13 +62,15 @@ When used from programming languages, it should probably be wrapped in an interf
 
 which is implemented something like this:
 
-	file_descriptor spawnfd(string command_line) {
-        fdA, fdB = fdpair();
+	spawnfd(command_line : string list) -> file_descriptor {
+        fdA, fdB = socketpair(AF_UNIX, SOCK_SEQPACKET|SOCK_CLOEXEC);
         command = "supervise ${fdA} ${fdA} ${command_line}";
         spawn(command);
 	    close(fdA);
         return fdB;
 	}
+
+Make sure to use a transport (like `SOCK_SEQPACKET` or `O_DIRECT` pipes) which preserves message boundaries.
 
 controlfd commands
 ------------------
