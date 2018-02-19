@@ -16,7 +16,7 @@
 #include "common.h"
 #include "subreap_lib.h"
 
-void handle_command(const char *command, const int main_child_pid) {
+void handle_command(const char *command, const pid_t main_child_pid) {
     uint32_t signal = -1;
     if (sscanf(command, "signal %u\n", &signal) == 1) {
 	if (main_child_pid != -1) {
@@ -29,7 +29,7 @@ void handle_command(const char *command, const int main_child_pid) {
      */
 }
 
-void read_controlfd(const int controlfd, const int main_child_pid) {
+void read_controlfd(const int controlfd, const pid_t main_child_pid) {
     int size;
     char buf[4096] = {};
     while ((size = try_(read(controlfd, &buf, sizeof(buf)-1))) > 0) {
@@ -51,7 +51,7 @@ void read_fatalfd(const int fatalfd) {
     }
 }
 
-void read_childfd(int childfd, int statusfd, int main_child_pid) {
+void read_childfd(int childfd, int statusfd, pid_t main_child_pid) {
     struct signalfd_siginfo siginfo;
     /* signalfds can't have partial reads */
     while (try_(read(childfd, &siginfo, sizeof(siginfo))) == sizeof(siginfo)) {
