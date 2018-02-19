@@ -114,9 +114,22 @@ enum child_iterator_type pick_child_iterator(const pid_t mypid) {
 }
 
 void kill_all_children(void) {
+    /* What we need to do is iterate over all living children, and kill
+     * each of them. As we kill our children, our grandchildren will be
+     * reparented to us, giving us more living children, so we have to wrap
+     * this inner iteration in a loop. Only when we see no more living
+     * children can we safely exit. */
+    /* There are three practical techniques we can use to iterate over all
+     * living children. All of them share a few pieces of information: */
+    /* Get the maximum possible pid for this system. */
     const pid_t maxpid = get_maxpid();
     /* get my pid, bypassing glibc pid cache */
     const pid_t mypid = syscall(SYS_getpid);
+    /* An array in which we'll record whether a certain pid belongs to a
+     * dead child. Since we don't collect zombies, if a pid belongs to a
+     * child, that pid will stay belonging to that child, even if that
+     * child is dead. Also, whenever we see a child, we immediately kill
+     * it, so anything we know is a child will be dead and in this array. */
     /* This is at most 4MB large, see PID_MAX_LIMIT and get_maxpid(). */
     bool dead[maxpid];
     memset(dead, false, sizeof(dead));
@@ -127,6 +140,12 @@ void kill_all_children(void) {
 	/* Iterate over every possible pid, checking if they're our child. */
 	while (kill_children_with_exhaustion(dead, maxpid, mypid));
     } break;
+    /* Other possible techniques include:
+     * - Using a feature which notifies us when children are reparented to us,
+     *   as proposed here:
+     *   http://lkml.iu.edu/hypermail/linux/kernel/0812.3/00647.html
+     * - Having the kernel provide a list which includes only living children
+     */
     }
 }
 
