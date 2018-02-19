@@ -99,20 +99,19 @@ bool maybe_kill_living_child(const pid_t pid, bool *dead, const pid_t mypid) {
     return true;
 }
 
-/* returns true if it killed any children */
-/* takes a bitset of dead child pids, and sets in it any new children killed */
+/* Returns true if it saw any living children. */
 bool kill_children_with_exhaustion(bool *dead, const pid_t maxpid, const pid_t mypid) {
-    bool killed = false;
-    /* this is pretty efficient because children have a higher pid than their
-     * parents (modulo pid wraps), so iterating over all pids is equivalent to
-     * just walking the tree. */
-    /* pid wraps are dealt with by calling this function in a loop */
+    bool saw_a_living_child = false;
+    /* Just walk over all possible processes in the system. This is fairly
+     * efficient in the presence of constantly forking children, because
+     * children have a higher pid than their parents (modulo pid wraps), so
+     * iterating over all pids is equivalent to just walking the tree. */
     for (pid_t pid = 1; pid < maxpid; pid++) {
 	if (maybe_kill_living_child(pid, dead, mypid)) {
-	    killed = true;
+	    saw_a_living_child = true;
 	}
     }
-    return killed;
+    return saw_a_living_child;
 }
 
 enum child_iterator_type {
