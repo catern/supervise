@@ -80,7 +80,7 @@ void wait_for_death(pid_t pid) {
 
 /* returns true if it killed any children */
 /* takes a bitset of dead child pids, and sets in it any new children killed */
-bool kill_children(bool *dead, const pid_t max_pid, const pid_t mypid) {
+bool kill_children_with_exhaustion(bool *dead, const pid_t max_pid, const pid_t mypid) {
     bool killed = false;
     /* this is pretty efficient because children have a higher pid than their
      * parents (modulo pid wraps), so iterating over all pids is equivalent to
@@ -105,6 +105,14 @@ bool kill_children(bool *dead, const pid_t max_pid, const pid_t mypid) {
     return killed;
 }
 
+enum child_iterator_type {
+    EXHAUSTIVE,
+};
+
+enum child_iterator_type pick_child_iterator(const pid_t mypid) {
+    return EXHAUSTIVE;
+}
+
 void kill_all_children(void) {
     const pid_t maxpid = get_maxpid();
     /* get my pid, bypassing glibc pid cache */
@@ -112,11 +120,14 @@ void kill_all_children(void) {
     /* This is at most 4MB large, see PID_MAX_LIMIT and get_maxpid(). */
     bool dead[maxpid];
     memset(dead, false, sizeof(dead));
-    /* keep killing children until there are no more to kill */
-    while (kill_children(dead, maxpid, mypid));
-    /* We will call kill_children at most max_pid times,
-     * since we will kill each pid at most once. */
-    /* (In the typical case we'll call it twice) */
+    /* We pick the technique for iterating over children that will work
+     * on our system, and call it in a loop: */
+    switch (pick_child_iterator(mypid)) {
+    case EXHAUSTIVE: {
+	/* Iterate over every possible pid, checking if they're our child. */
+	while (kill_children_with_exhaustion(dead, maxpid, mypid));
+    } break;
+    }
 }
 
 /* On return, we guarantee that the current process has no more children. */
