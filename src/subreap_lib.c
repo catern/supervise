@@ -100,7 +100,7 @@ bool maybe_kill_living_child(const pid_t pid, bool *dead, const pid_t mypid) {
 }
 
 /* Returns true if it saw any living children. */
-bool kill_children_with_exhaustion(bool *dead, const pid_t maxpid, const pid_t mypid) {
+bool kill_children_with_exhaustion(bool *dead, const pid_t mypid, const pid_t maxpid) {
     bool saw_a_living_child = false;
     /* Just walk over all possible processes in the system. This is fairly
      * efficient in the presence of constantly forking children, because
@@ -147,7 +147,7 @@ void kill_all_children(void) {
     switch (pick_child_iterator(mypid)) {
     case EXHAUSTIVE: {
 	/* Iterate over every possible pid, checking if they're our child. */
-	while (kill_children_with_exhaustion(dead, maxpid, mypid));
+	while (kill_children_with_exhaustion(dead, mypid, maxpid));
     } break;
     /* Other possible techniques include:
      * - Using a feature which notifies us when children are reparented to us,
