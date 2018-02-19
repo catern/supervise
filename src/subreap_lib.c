@@ -13,6 +13,7 @@
 #include <syscall.h>
 #include "subreap_lib.h"
 #include "common.h"
+#include <dirent.h>
 
 /* This is at most PID_MAX_LIMIT, which is 2^22, approximately 4 million. */
 pid_t get_maxpid(void) {
@@ -114,12 +115,37 @@ bool kill_children_with_exhaustion(bool *dead, const pid_t mypid, const pid_t ma
     return saw_a_living_child;
 }
 
+/* Returns true if it saw any living children. */
+bool kill_children_with_proc(bool *dead, const pid_t mypid) {
+    bool saw_a_living_child = false;
+    DIR* procdir = opendir("/proc");
+    struct dirent *pident;
+    /* We're only walking over processes that actually exist. That will be
+     * more efficient relative to with_exhaustion in the normal case of
+     * passive children. But if our children are actively forking, we may
+     * have to do more loops around this function, because readdir batches
+     * fetching of dirents from /proc and may miss the newly forked
+     * processes. */
+    while ((pident = readdir(procdir)) != NULL) {
+	int pid;
+	if (sscanf(pident->d_name, "%d", &pid) != 1) continue;
+	if (maybe_kill_living_child(pid, dead, mypid)) {
+	    saw_a_living_child = true;
+	}
+    }
+    closedir(procdir);
+    return saw_a_living_child;
+}
+
 enum child_iterator_type {
     EXHAUSTIVE,
+    PROC,
 };
 
 enum child_iterator_type pick_child_iterator(const pid_t mypid) {
-    return EXHAUSTIVE;
+    /* There's no point in defaulting to EXHAUSTIVE, because it still
+     * requires /proc to be mounted to discover ppid(). */
+    return PROC;
 }
 
 void kill_all_children(void) {
@@ -148,6 +174,10 @@ void kill_all_children(void) {
     case EXHAUSTIVE: {
 	/* Iterate over every possible pid, checking if they're our child. */
 	while (kill_children_with_exhaustion(dead, mypid, maxpid));
+    } break;
+    case PROC: {
+	/* Iterate over every pid in /proc, checking if they're our child. */
+	while (kill_children_with_proc(dead, mypid));
     } break;
     /* Other possible techniques include:
      * - Using a feature which notifies us when children are reparented to us,
