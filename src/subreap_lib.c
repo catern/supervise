@@ -137,12 +137,53 @@ bool kill_children_with_proc(bool *dead, const pid_t mypid) {
     return saw_a_living_child;
 }
 
+/* Returns true if it saw any living children. */
+bool kill_children_with_proc_children(bool *dead, const pid_t mypid) {
+    bool saw_a_living_child = false;
+    FILE* children = get_children_stream(mypid);
+    if (!children) {
+	err(1, "failed to get children stream");
+    }
+    /* We're only walking over our actual child processes, both dead and
+     * alive. This is definitely very efficient if our children are not
+     * actively forking and creating new grandchildren. In the presence of
+     * forking, the other implementations may be competitive; see the
+     * comments there. */
+    for (;;) {
+	int pid;
+	int ret = fscanf(children, "%d", &pid);
+	if (ret == EOF) {
+	    if (ferror(children)) {
+		err(1, "fscanf failed");
+	    }
+	    break;
+	}
+	/* If this pid is already a dead child, there's no need to kill it again. */
+	if (dead[pid]) continue;
+	/* We know that any pid in this stream is our child, and they can't stop
+	 * being our child, so we don't have to check. */
+	kill_child(pid);
+	/* Mark this pid as a dead child; it will stay a dead child until we exit. */
+	dead[pid] = true;
+	saw_a_living_child = true;
+    }
+    fclose(children);
+    return saw_a_living_child;
+}
+
 enum child_iterator_type {
     EXHAUSTIVE,
     PROC,
+    PROC_CHILDREN,
 };
 
 enum child_iterator_type pick_child_iterator(const pid_t mypid) {
+    /* Use PROC_CHILDREN if the children stream is available. */
+    FILE* children = get_children_stream(mypid);
+    if (children) {
+	fclose(children);
+	return PROC_CHILDREN;
+    }
     /* There's no point in defaulting to EXHAUSTIVE, because it still
      * requires /proc to be mounted to discover ppid(). */
     return PROC;
@@ -178,6 +219,10 @@ void kill_all_children(void) {
     case PROC: {
 	/* Iterate over every pid in /proc, checking if they're our child. */
 	while (kill_children_with_proc(dead, mypid));
+    } break;
+    case PROC_CHILDREN: {
+	/* Iterate over the list of children in /proc/pid/task/tid/children. */
+	while (kill_children_with_proc_children(dead, mypid));
     } break;
     /* Other possible techniques include:
      * - Using a feature which notifies us when children are reparented to us,
