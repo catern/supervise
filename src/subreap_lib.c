@@ -101,13 +101,13 @@ bool maybe_kill_living_child(const pid_t pid, bool *dead, const pid_t mypid) {
 
 /* returns true if it killed any children */
 /* takes a bitset of dead child pids, and sets in it any new children killed */
-bool kill_children_with_exhaustion(bool *dead, const pid_t max_pid, const pid_t mypid) {
+bool kill_children_with_exhaustion(bool *dead, const pid_t maxpid, const pid_t mypid) {
     bool killed = false;
     /* this is pretty efficient because children have a higher pid than their
      * parents (modulo pid wraps), so iterating over all pids is equivalent to
      * just walking the tree. */
     /* pid wraps are dealt with by calling this function in a loop */
-    for (pid_t pid = 1; pid < max_pid; pid++) {
+    for (pid_t pid = 1; pid < maxpid; pid++) {
 	if (maybe_kill_living_child(pid, dead, mypid)) {
 	    killed = true;
 	}
