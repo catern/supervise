@@ -97,6 +97,51 @@ class TestSupervise(TestCase):
         with self.assertRaises(ValueError):
             supervise_api.Process(["sh", "-c", "sleep inf"], fds={0: fdnum})
 
+    def multifork(self, cmd):
+        # using % here to avoid needing to escape {}
+        cmd = "{ echo started; %s; }" % (cmd)
+        started_length = len("started\n") * 5
+        args = ["sh", "-c",
+                "{ %s & %s & } & { %s & %s & } & { { { %s & } & } &} &" % (cmd, cmd, cmd, cmd, cmd)]
+        started, stdout = os.pipe()
+        try:
+            exited, w = os.pipe()
+        except:
+            os.close(exited)
+            os.close(w)
+            raise
+        try:
+            proc = supervise_api.Process(args, fds={w:w, 1:stdout})
+        except:
+            os.close(started)
+            os.close(stdout)
+            os.close(exited)
+            os.close(w)
+            raise
+        os.close(stdout)
+        os.close(w)
+        more_length = started_length
+        while more_length > 0:
+            more_length -= len(os.read(started, more_length))
+        proc.kill()
+        proc.wait()
+        proc.close()
+        # we should get eof because the process should be dead
+        data = os.read(exited, 4096)
+        self.assertEqual(len(data), 0)
+
+    def test_multifork(self):
+        self.multifork("sleep inf")
+
+    def test_nohup(self):
+        self.multifork("nohup sleep inf 2>/dev/null")
+
+    def test_setsid(self):
+        self.multifork("setsid sleep inf")
+
+    def test_setsid_and_nohup(self):
+        self.multifork("nohup setsid sleep inf 2>/dev/null")
+
 if __name__ == '__main__':
     import unittest
     unittest.main()
