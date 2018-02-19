@@ -116,9 +116,9 @@ int main(int argc, char **argv) {
     disable_sigpipe();
     struct options opt = get_options(argc, argv);
 
-    /* give filicide a trial run to see if we can do it;
-     * it's idempotent, so no worries */
-    trial_filicide();
+    /* Check that this system is configured in such a way that we can
+     * actually call filicide() and it will work. */
+    sanity_check();
     void handle_exit(void) {
 	filicide();
 	dprintf(opt.statusfd, "terminating\n");

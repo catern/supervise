@@ -119,23 +119,14 @@ void kill_all_children(void) {
     /* (In the typical case we'll call it twice) */
 }
 
-void kill_children_up_to(const pid_t maxpid) {
-    const pid_t mypid = syscall(SYS_getpid);
-    bool dead[maxpid];
-    memset(dead, false, sizeof(dead));
-    while (kill_children(dead, maxpid, mypid));
-}
-
 /* On return, we guarantee that the current process has no more children. */
 void filicide(void) {
     kill_all_children();
 }
 
-/* Exercise filicide to see if it works properly on this system.
- * We don't run real filicide, because it's fairly expensive.
-*/
-void trial_filicide(void) {
-    kill_children_up_to(16);
+void sanity_check(void) {
+    /* This will fail if /proc is not mounted. */
+    try_(ppid_of(getpid()));
 }
 
 const int deathsigs[] = {
