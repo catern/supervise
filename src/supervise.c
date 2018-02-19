@@ -119,8 +119,9 @@ int main(int argc, char **argv) {
     /* Check that this system is configured in such a way that we can
      * actually call filicide() and it will work. */
     sanity_check();
+    bool called_filicide = false;
     void handle_exit(void) {
-	filicide();
+	if (!called_filicide) filicide();
 	dprintf(opt.statusfd, "terminating\n");
     };
     atexit(handle_exit);
@@ -163,6 +164,7 @@ int main(int argc, char **argv) {
 	       status messages for killing all our children.
 	    */
 	    filicide();
+	    called_filicide = true;
 	}
 	if (pollfds[1].revents & POLLIN) {
 	    read_childfd(childfd, opt.statusfd, main_child_pid);
