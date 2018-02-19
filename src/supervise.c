@@ -51,7 +51,7 @@ void read_fatalfd(const int fatalfd) {
     }
 }
 
-void read_childfd(int childfd, int statusfd, pid_t main_child_pid) {
+void read_childfd(int childfd, int statusfd, pid_t* main_child_pid) {
     struct signalfd_siginfo siginfo;
     /* signalfds can't have partial reads */
     while (try_(read(childfd, &siginfo, sizeof(siginfo))) == sizeof(siginfo)) {
@@ -68,7 +68,10 @@ void read_childfd(int childfd, int statusfd, pid_t main_child_pid) {
 	    if (childinfo.si_pid == 0) break;
 
 	    /* we only report information for our main child */
-	    if (childinfo.si_pid != main_child_pid) continue;
+	    if (childinfo.si_pid != *main_child_pid) continue;
+	    /* The main child has exited. Set it to -1 so we don't try
+	     * and kill it if the user requests that. */
+	    *main_child_pid = -1;
 
 	    /* stringify the state change and print it */
 	    if (childinfo.si_code == CLD_EXITED) {
@@ -134,7 +137,7 @@ int main(int argc, char **argv) {
     const int fatalfd = get_fatalfd();
     const int childfd = get_childfd();
 
-    const pid_t main_child_pid = try_(fork());
+    pid_t main_child_pid = try_(fork());
     if (main_child_pid == 0) {
 	/* the child will automatically get sigterm when the parent dies;
 	 * a last-ditch effort to be effective even if we get SIGKILL'd */
@@ -167,7 +170,7 @@ int main(int argc, char **argv) {
 	    called_filicide = true;
 	}
 	if (pollfds[1].revents & POLLIN) {
-	    read_childfd(childfd, opt.statusfd, main_child_pid);
+	    read_childfd(childfd, opt.statusfd, &main_child_pid);
 	}
 	if (pollfds[2].revents & POLLIN) {
 	    read_fatalfd(fatalfd);
