@@ -71,11 +71,32 @@ pid_t ppid_of(pid_t pid) {
     return str_to_int(after_command + skip_to_ppid);
 }
 
-/* this waits for a pid to die; it must be our child and must not have been
- * collected before; it leaves the zombie behind, uncollected. */
-void wait_for_death(pid_t pid) {
+void kill_child(pid_t pid) {
+    /* this cannot fail. if we're here, this pid is an immediate child of
+     * us, and even if it already exited, it's still a zombie because we
+     * haven't collected it. */
+    try_(kill(pid, SIGKILL));
+    /* once pid is dead, all its children are reparented to us, and we will see
+     * them on the next iteration. but if we don't wait for it to die, we might
+     * exit before it gets SIGKILL and its children are reparented and we see
+     * them. essentially, we need to synchronize with pid's death. */
+    /* we block until pid actually dies, but we don't collect the zombie, to
+     * preserve our invariant that pids that are our children cannot stop being
+     * our children even through death. */
     siginfo_t childinfo;
     try_(waitid(P_PID, pid, &childinfo, WEXITED|WNOWAIT));
+}
+
+/* Returns true if pid was a living child. Also kills it. */
+bool maybe_kill_living_child(const pid_t pid, bool *dead, const pid_t mypid) {
+    /* If this pid is already a dead child, there's no need to kill it again. */
+    if (dead[pid]) return false;
+    /* Not our child, or nonexistent */
+    if (ppid_of(pid) != mypid) return false;
+    kill_child(pid);
+    /* Mark this pid as a dead child; it will stay a dead child until we exit. */
+    dead[pid] = true;
+    return true;
 }
 
 /* returns true if it killed any children */
@@ -87,20 +108,9 @@ bool kill_children_with_exhaustion(bool *dead, const pid_t max_pid, const pid_t 
      * just walking the tree. */
     /* pid wraps are dealt with by calling this function in a loop */
     for (pid_t pid = 1; pid < max_pid; pid++) {
-	/* already killed */
-	if (dead[pid]) continue;
-	/* not our child or nonexistent */
-	if (ppid_of(pid) != mypid) continue;
-	/* this cannot fail. if we're here, this pid is an immediate child of
-	 * us, and even if it already exited, it's still a zombie because we
-	 * haven't collected it. */
-	try_(kill(pid, SIGKILL));
-	/* once pid is dead, all its children are reparented to us, and we will
-	 * see them on the next iteration. but if we don't wait for it to die,
-	 * we might exit before it gets SIGKILL and its children are reparented. */
-	wait_for_death(pid);
-	dead[pid] = true;
-	killed = true;
+	if (maybe_kill_living_child(pid, dead, mypid)) {
+	    killed = true;
+	}
     }
     return killed;
 }
