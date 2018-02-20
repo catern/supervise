@@ -1,4 +1,4 @@
-AC_INIT([supervise], [1.3.0], [sbaugh@catern.com])
+AC_INIT([supervise], [1.4.0], [sbaugh@catern.com])
 AM_INIT_AUTOMAKE([-Wall -Werror foreign])
 AC_PROG_CC
 AM_PROG_AR
