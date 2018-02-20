@@ -160,7 +160,7 @@ If you just want things to work, please feel free to skip over the explanation t
 Long-winded philosophizing about approach
 -----------------------------------------
 
-This behavior is fundamentally a matter of reference counting, which is a concept fundamental to Unix and many other systems.
+This behavior is a matter of reference counting, which is a concept fundamental to Unix and many other systems.
 We want our resource to stick around
 as long as there is at least one reference to that resource.
 A resource, once created, should be destructed if and only if both of these properties are true:
@@ -226,7 +226,7 @@ As an interesting side note,
 if an "flink" system call was added this logic would break down.
 "flink" would take a path, and a file descriptor which currently has a link count of zero,
 and creates a new link to that file descriptor at that path.
-In fact iI think it would become fundamentally impossible in the presence of flink
+In fact I think it would become impossible in the presence of flink
 to do this kind of reference counting across the filesystem and file descriptors:
 link count and POLLHUP are two pieces of information read from separate interfaces,
 and you would want to destruct your resource when link count is 0 and you are receiving POLLHUP,
@@ -267,5 +267,5 @@ TODO
 ====
 
 - Support a binary interface in addition to the text interface
-- Fix the text interface to cope with partial reads and multiple lines per read
-- Optimization: support reading `/proc/[pid]/task/[tid]/children`
+- Make the text interface cope with partial reads and multiple lines per read,
+  so we can use transports which don't preserve message boundaries.
