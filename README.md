@@ -40,7 +40,7 @@ supervise writes the state change to `statusfd`.
 When supervise exits, it terminates all its transitive children.
 It is not possible for transitive children of supervise to escape supervise's notice,
 so when supervise exits it fully cleans up all processes that were created by it or its transitive children.
-This is achieved through the use of CHILD_SUBREAPER Linux API.
+This is achieved by using the `CHILD_SUBREAPER` Linux API.
 
 Invocation and use
 ==================
@@ -58,7 +58,7 @@ Supervise is invoked like this:
 supervise can be used from the shell, but it is especially useful when used from programming languages.
 When used from programming languages, it should probably be wrapped in an interface looking something like this:
 
-    spawnfd : string -> file_descriptor
+    spawnfd : string list -> file_descriptor
 
 which is implemented something like this:
 
