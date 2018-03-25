@@ -13,5 +13,5 @@ setup(name='supervise_api',
       url='https://github.com/catern/supervise',
       author='catern',
       author_email='sbaugh@catern.com',
-      license='LGPLv3+',
+      license='MIT',
       packages=['supervise_api'])
