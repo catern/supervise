@@ -1,6 +1,7 @@
 from unittest import TestCase
 import os
 
+import subprocess
 import supervise_api
 import pathlib
 import signal
@@ -14,12 +15,25 @@ def collect_children():
         except ChildProcessError:
             return collected
 
+def parse_fd_set(data):
+    return set(int(name) for name in data.split(b'\n') if len(name) != 0)
+
+def open_fd_set():
+    # Python doesn't provide a means of reading this directory
+    # in-process and knowing what file descriptor you are using to
+    # read it, so a spurious file descriptor shows up and can't be
+    # removed.
+    proc = subprocess.run(["ls", "-1", f"/proc/{os.getpid()}/fd"], check=True, stdout=subprocess.PIPE)
+    return parse_fd_set(proc.stdout)
+
 class TestSupervise(TestCase):
     def setUp(self):
         signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+        self.open_fds = open_fd_set()
 
     def tearDown(self):
         collect_children()
+        self.assertEqual(self.open_fds, open_fd_set())
 
     def just_run(self, args):
         r, w = os.pipe()
@@ -36,6 +50,7 @@ class TestSupervise(TestCase):
         # we should get eof because the process should be dead
         data = os.read(r, 4096)
         self.assertEqual(len(data), 0)
+        os.close(r)
 
     def test_basics(self):
         self.just_run(["sh", "-c", "sleep inf"])
@@ -129,6 +144,8 @@ class TestSupervise(TestCase):
         # we should get eof because the process should be dead
         data = os.read(exited, 4096)
         self.assertEqual(len(data), 0)
+        os.close(started)
+        os.close(exited)
 
     def test_multifork(self):
         self.multifork("sleep inf")
