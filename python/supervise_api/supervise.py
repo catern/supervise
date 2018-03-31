@@ -110,8 +110,6 @@ def update_fds(fds):
             fds[target] = fileno(orig_fds[target])
 
     ## Actual work
-    devnull = None
-    target_fds_all_open = False
     # If a target file descriptor does not refer to an actually open
     # file descriptor, make it a copy of /dev/null.
     def ensure_target_fds_open():
@@ -155,8 +153,8 @@ def update_fds(fds):
                 source = copied_sources[source]
             os.dup2(source, target)
     finally:
-        if devnull:
-            os.close(devnull)
+        if hasattr(ensure_target_fds_open, "devnull"):
+            os.close(ensure_target_fds_open.devnull)
         for copy in copied_sources.values():
             os.close(copy)
 
