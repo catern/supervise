@@ -5,6 +5,7 @@ import subprocess
 import supervise_api
 import pathlib
 import signal
+import tempfile
 
 def collect_children():
     collected = False
@@ -111,6 +112,32 @@ class TestSupervise(TestCase):
         # devnull is closed now
         with self.assertRaises(ValueError):
             supervise_api.Process(["sh", "-c", "sleep inf"], fds={0: fdnum})
+
+    def test_fds_swap(self):
+        with open("/dev/null") as devnull:
+            proc = supervise_api.Process(["sh", "-c", "sleep inf"], fds={devnull.fileno(): 0, 0: devnull})
+        proc.kill()
+        proc.wait()
+        proc.close()
+
+    def test_fds_unopened(self):
+        with open("/dev/null") as devnull:
+            proc = supervise_api.Process(["sh", "-c", "sleep inf"], fds={devnull.fileno(): 0, 42: devnull})
+        proc.kill()
+        proc.wait()
+        proc.close()
+
+    def test_fds_unopened_noleaks(self):
+        with tempfile.TemporaryFile() as temp:
+            with open("/dev/null") as devnull:
+                proc = supervise_api.Process(["sh", "-c", "ls -1 /proc/$$/fd; true"], fds={devnull.fileno(): 0, 42: devnull, 1:temp})
+                sent_fds = self.open_fds.union(set([devnull.fileno(), 42, 1]))
+                sent_fds.remove(temp.fileno())
+            proc.wait()
+            proc.close()
+            temp.seek(0)
+            received_fds = parse_fd_set(temp.read())
+            self.assertTrue(received_fds.issubset(sent_fds))
 
     def multifork(self, cmd):
         # using % here to avoid needing to escape {}
