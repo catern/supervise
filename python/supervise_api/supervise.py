@@ -94,7 +94,8 @@ def update_fds(fds):
            { 1: desired, 2: 1 }
         You should do:
            { 1: desired, 2: desired }
-    :type fds: ``{ int/objects with fileno(): int/objects with fileno() or None }``
+        If an fd is mapped to None, it will be closed.
+    :type fds: ``{ int: int/None/object with fileno() }``
 
     """
 
@@ -187,7 +188,8 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
 
     :param fds:
         A dictionary of updates to be performed to the fds by update_fds.
-    :type fds: ``{ int/objects with fileno(): int/objects with fileno() or None }``
+        If an fd is mapped to None, it will be closed.
+    :type fds: ``{ int: int/None/object with fileno() }``
 
     :param cwd:
         The working directory to change to.
