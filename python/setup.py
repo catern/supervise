@@ -6,7 +6,7 @@ setup(name='supervise_api',
       long_description=("This package uses the supervise utility, a separately-available C binary,"
                         " to provide a better process API for Linux."),
       classifiers=[
-          "License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)",
+          "License :: OSI Approved :: MIT License",
           "Operating System :: POSIX :: Linux",
       ],
       keywords='linux subprocess processes',
