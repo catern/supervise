@@ -6,6 +6,7 @@ import supervise_api
 import pathlib
 import signal
 import tempfile
+import fcntl
 
 def collect_children():
     collected = False
@@ -16,16 +17,18 @@ def collect_children():
         except ChildProcessError:
             return collected
 
+def is_open_fd(fd):
+    try:
+        fcntl.fcntl(fd, fcntl.F_GETFD)
+        return True
+    except OSError:
+        return False
+
 def parse_fd_set(data):
     return set(int(name) for name in data.split(b'\n') if len(name) != 0)
 
-def open_fd_set():
-    # Python doesn't provide a means of reading this directory
-    # in-process and knowing what file descriptor you are using to
-    # read it, so a spurious file descriptor shows up and can't be
-    # removed.
-    proc = subprocess.run(["ls", "-1", f"/proc/{os.getpid()}/fd"], check=True, stdout=subprocess.PIPE)
-    return parse_fd_set(proc.stdout)
+def open_fd_set(up_to=1000):
+    return set(fd for fd in range(up_to) if is_open_fd(fd))
 
 class TestSupervise(TestCase):
     def setUp(self):
@@ -132,7 +135,6 @@ class TestSupervise(TestCase):
             with open("/dev/null") as devnull:
                 proc = supervise_api.Process(["sh", "-c", "ls -1 /proc/$$/fd; true"], fds={devnull.fileno(): 0, 42: devnull, 1:temp})
                 sent_fds = self.open_fds.union(set([devnull.fileno(), 42, 1]))
-                sent_fds.remove(temp.fileno())
             proc.wait()
             proc.close()
             temp.seek(0)
