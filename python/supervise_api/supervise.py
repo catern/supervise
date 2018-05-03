@@ -247,6 +247,8 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
     if cwd: os.chdir(cwd)
     os.environ.update(env)
     update_fds(fds)
+    # stop Ctrl-C on controlling terminal from killing subprocess prematurely
+    os.setsid()
     os.execvp(realargs[0], realargs)
 
 class Process(object):
