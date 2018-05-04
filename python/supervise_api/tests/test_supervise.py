@@ -13,7 +13,7 @@ def collect_children():
     collected = False
     while True:
         try:
-            os.waitid(os.P_ALL, 0, os.WEXITED)
+            os.waitpid(-1, 0)
             collected = True
         except OSError as e:
             if e.errno == errno.ECHILD:
