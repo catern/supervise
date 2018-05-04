@@ -1,9 +1,17 @@
 with import <nixpkgs> {};
 with pkgs.python36Packages;
 
-buildPythonPackage {
+{
+py27 = with pkgs.python27Packages; buildPythonPackage {
   name = "supervise_api";
   src = ./.;
-  buildInputs = [ utillinux ];
+  checkInputs = [ utillinux ];
+  propagatedBuildInputs = [ (import ./..) linuxfd whichcraft ];
+};
+py36 = with pkgs.python36Packages; buildPythonPackage {
+  name = "supervise_api";
+  src = ./.;
+  checkInputs = [ utillinux ];
   propagatedBuildInputs = [ (import ./..) linuxfd ];
+};
 }
