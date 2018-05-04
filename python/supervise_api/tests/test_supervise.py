@@ -7,6 +7,7 @@ import pathlib
 import signal
 import tempfile
 import fcntl
+import errno
 
 def collect_children():
     collected = False
@@ -14,15 +15,21 @@ def collect_children():
         try:
             os.waitid(os.P_ALL, 0, os.WEXITED)
             collected = True
-        except ChildProcessError:
-            return collected
+        except OSError as e:
+            if e.errno == errno.ECHILD:
+                return collected
+            else:
+                raise
 
 def is_open_fd(fd):
     try:
         fcntl.fcntl(fd, fcntl.F_GETFD)
         return True
-    except OSError:
-        return False
+    except IOError as e:
+        if e.errno == errno.EBADF:
+            return False
+        else:
+            raise
 
 def parse_fd_set(data):
     return set(int(name) for name in data.split(b'\n') if len(name) != 0)
@@ -92,8 +99,9 @@ class TestSupervise(TestCase):
         self.assertTrue(flag)
 
     def test_executable_not_found(self):
-        with self.assertRaises(FileNotFoundError):
+        with self.assertRaises(OSError) as cm:
             supervise_api.Process(["supervise_api_nonexistent_executable_aosije"])
+        self.assertEqual(cm.exception.errno, errno.ENOENT)
 
     def test_fds(self):
         with open("/dev/null") as devnull:

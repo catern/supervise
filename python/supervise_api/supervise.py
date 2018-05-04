@@ -224,7 +224,7 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
             raise ValueError("fds[{}] file is closed: {}".format(fd, source_fd))
     executable = which(args[0], path=env.get("PATH", os.environ["PATH"]))
     if not executable:
-        raise FileNotFoundError(errno.ENOENT, "Executable not found in PATH", args[0])
+        raise OSError(errno.ENOENT, "Executable not found in PATH", args[0])
     args[0] = executable
 
     parent_side, child_side = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET|flags, 0)
