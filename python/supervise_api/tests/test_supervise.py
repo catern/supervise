@@ -89,14 +89,13 @@ class TestSupervise(TestCase):
         self.assertEqual(collect_children(), True)
 
     def test_pathlib_sigchld_handler(self):
-        flag = False
+        state = {'flag': False}
         def handler(signum, frame):
-            nonlocal flag
-            flag = True
+            state['flag'] = True
         signal.signal(signal.SIGCHLD, handler)
         self.just_run(["sh", "-c", "sleep inf"])
         self.assertEqual(collect_children(), True)
-        self.assertTrue(flag)
+        self.assertTrue(state['flag'])
 
     def test_executable_not_found(self):
         with self.assertRaises(OSError) as cm:
