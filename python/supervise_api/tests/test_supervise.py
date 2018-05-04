@@ -1,13 +1,17 @@
-from unittest import TestCase
+import unittest
 import os
 
 import subprocess
 import supervise_api
-import pathlib
 import signal
 import tempfile
 import fcntl
 import errno
+import sys
+
+py3 = sys.version_info[0] >= 3
+if py3:
+    import pathlib
 
 def collect_children():
     collected = False
@@ -37,7 +41,7 @@ def parse_fd_set(data):
 def open_fd_set(up_to=1000):
     return set(fd for fd in range(up_to) if is_open_fd(fd))
 
-class TestSupervise(TestCase):
+class TestSupervise(unittest.TestCase):
     def setUp(self):
         signal.signal(signal.SIGCHLD, signal.SIG_IGN)
         self.open_fds = open_fd_set()
@@ -74,20 +78,24 @@ class TestSupervise(TestCase):
         sh_relpath = os.path.relpath(supervise_api.which("sh"))
         self.just_run([sh_relpath, "-c", "sleep inf"])
 
+    @unittest.skipIf(not py3, "requires Python3 pathlib")
     def test_pathlib_Path(self):
         sh_path = pathlib.Path(supervise_api.which("sh"))
         self.just_run([sh_path, "-c", "sleep inf"])
 
+    @unittest.skipIf(not py3, "requires Python3 pathlib")
     def test_pathlib_sigchld_sigign(self):
         signal.signal(signal.SIGCHLD, signal.SIG_IGN)
         self.just_run(["sh", "-c", "sleep inf"])
         self.assertEqual(collect_children(), False)
 
+    @unittest.skipIf(not py3, "requires Python3 pathlib")
     def test_pathlib_sigchld_sigdfl(self):
         signal.signal(signal.SIGCHLD, signal.SIG_DFL)
         self.just_run(["sh", "-c", "sleep inf"])
         self.assertEqual(collect_children(), True)
 
+    @unittest.skipIf(not py3, "requires Python3 pathlib")
     def test_pathlib_sigchld_handler(self):
         state = {'flag': False}
         def handler(signum, frame):
