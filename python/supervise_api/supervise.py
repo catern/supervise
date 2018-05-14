@@ -228,7 +228,6 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
     args[0] = executable
 
     parent_side, child_side = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET|flags, 0)
-    set_inheritable(child_side.fileno(), True)
     commfd = str(child_side.fileno())
     realargs = [supervise_utility_location, commfd, commfd] + args
     try:
@@ -244,6 +243,7 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
         return parent_side
     # we are now in the child
     parent_side.close()
+    set_inheritable(child_side.fileno(), True)
     if cwd: os.chdir(cwd)
     os.environ.update(env)
     update_fds(fds)
