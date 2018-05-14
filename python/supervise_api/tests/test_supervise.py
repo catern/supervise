@@ -83,20 +83,17 @@ class TestSupervise(unittest.TestCase):
         sh_path = pathlib.Path(supervise_api.which("sh"))
         self.just_run([sh_path, "-c", "sleep inf"])
 
-    @unittest.skipIf(not py3, "requires Python3 pathlib")
-    def test_pathlib_sigchld_sigign(self):
+    def test_sigchld_sigign(self):
         signal.signal(signal.SIGCHLD, signal.SIG_IGN)
         self.just_run(["sh", "-c", "sleep inf"])
         self.assertEqual(collect_children(), False)
 
-    @unittest.skipIf(not py3, "requires Python3 pathlib")
-    def test_pathlib_sigchld_sigdfl(self):
+    def test_sigchld_sigdfl(self):
         signal.signal(signal.SIGCHLD, signal.SIG_DFL)
         self.just_run(["sh", "-c", "sleep inf"])
         self.assertEqual(collect_children(), True)
 
-    @unittest.skipIf(not py3, "requires Python3 pathlib")
-    def test_pathlib_sigchld_handler(self):
+    def test_sigchld_handler(self):
         state = {'flag': False}
         def handler(signum, frame):
             state['flag'] = True
