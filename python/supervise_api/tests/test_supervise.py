@@ -200,6 +200,27 @@ class TestSupervise(unittest.TestCase):
     def test_setsid_and_nohup(self):
         self.multifork("nohup setsid sleep inf 2>/dev/null")
 
+    @unittest.skipIf(not py3, "requires get_inheritable from Python 3")
+    def test_flags_default_cloexec(self):
+        proc = supervise_api.Process(["sh", "-c", "sleep inf"])
+        inheritable = os.get_inheritable(proc.fileno())
+        proc.close()
+        self.assertFalse(inheritable)
+
+    @unittest.skipIf(not py3, "requires get_inheritable from Python 3")
+    def test_flags_yes_cloexec(self):
+        proc = supervise_api.Process(["sh", "-c", "sleep inf"], flags=os.O_CLOEXEC)
+        inheritable = os.get_inheritable(proc.fileno())
+        proc.close()
+        self.assertFalse(inheritable)
+
+    @unittest.skipIf(not py3, "requires get_inheritable from Python 3")
+    def test_flags_no_cloexec(self):
+        proc = supervise_api.Process(["sh", "-c", "sleep inf"], flags=0)
+        inheritable = os.get_inheritable(proc.fileno())
+        proc.close()
+        self.assertTrue(inheritable)
+
 if __name__ == '__main__':
     import unittest
     unittest.main()

@@ -228,6 +228,9 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
     args[0] = executable
 
     parent_side, child_side = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET|flags, 0)
+    # counteract Python's behavior of setting O_CLOEXEC by default
+    if not (flags & O_CLOEXEC):
+        set_inheritable(parent_side.fileno(), True)
     commfd = str(child_side.fileno())
     realargs = [supervise_utility_location, commfd, commfd] + args
     try:
