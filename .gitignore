@@ -1,5 +1,5 @@
-/src/supervise
-/src/unlinkwait
+/c/src/supervise
+/c/src/unlinkwait
 *.pyc
 
 # Setuptools distribution folder.
@@ -10,17 +10,17 @@
 *.o
 *.a
 *.in
-/autom4te.cache
-/stamp-h1
-/src/Makefile
-/depcomp
-/install-sh
-/missing
-/configure
-/config.log
-/config.status
-/config.h
-/aclocal.m4
-/compile
-/Makefile
-/ar-lib
+/c/autom4te.cache
+/c/stamp-h1
+/c/src/Makefile
+/c/depcomp
+/c/install-sh
+/c/missing
+/c/configure
+/c/config.log
+/c/config.status
+/c/config.h
+/c/aclocal.m4
+/c/compile
+/c/Makefile
+/c/ar-lib

@@ -6,12 +6,12 @@ py27 = with pkgs.python27Packages; buildPythonPackage {
   name = "supervise_api";
   src = ./.;
   checkInputs = [ utillinux ];
-  propagatedBuildInputs = [ (import ./..) linuxfd whichcraft ];
+  propagatedBuildInputs = [ (import ../c) linuxfd whichcraft ];
 };
 py36 = with pkgs.python36Packages; buildPythonPackage {
   name = "supervise_api";
   src = ./.;
   checkInputs = [ utillinux ];
-  propagatedBuildInputs = [ (import ./..) linuxfd ];
+  propagatedBuildInputs = [ (import ../c) linuxfd ];
 };
 }
