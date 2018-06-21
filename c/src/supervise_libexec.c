@@ -78,17 +78,26 @@ void read_childfd(int childfd, int statusfd) {
 	    }
 	    /* no child was in a waitable state */
 	    if (childinfo.si_pid == 0) break;
-            size_t written = try_(write(statusfd, &childinfo, sizeof(childinfo)));
-            /* We assume no partial writes since we're writing less
-             * than PIPE_BUF, but nevertheless... */
-            if (written != sizeof(childinfo)) {
-                errx(1, "Inexplicable partial write on statusfd");
-            }
+	    // if statusfd is -1, we don't care about printing status messages
+	    if (statusfd != -1) {
+                size_t written = write(statusfd, &childinfo, sizeof(childinfo));
+		if (written == -1) {
+		    if (errno == EPIPE) {
+			// do nothing, we don't care if the other end hung up
+		    } else {
+			err(1, "Failed to write(statusfd, &childinfo, sizeof(childinfo))");
+		    }
+		} else if (written != sizeof(childinfo)) {
+		    /* We should not get any partial writes since we're writing less
+		     * than PIPE_BUF, but nevertheless... */
+                    errx(1, "Inexplicable partial write on statusfd");
+                }
+	    }
         }
     }
 }
 
-int supervise(const int controlfd, const int statusfd) {
+int supervise(const int controlfd, int statusfd) {
     disable_sigpipe();
     /* Check that this system is configured in such a way that we can
      * actually call filicide() and it will work. */
@@ -103,13 +112,14 @@ int supervise(const int controlfd, const int statusfd) {
     const int fatalfd = get_fatalfd();
     const int childfd = get_childfd();
 
-    struct pollfd pollfds[3] = {
+    struct pollfd pollfds[4] = {
 	{ .fd = controlfd, .events = POLLIN|POLLRDHUP, .revents = 0, },
+	{ .fd = statusfd, .events = POLLHUP, .revents = 0, },
 	{ .fd = childfd, .events = POLLIN, .revents = 0, },
 	{ .fd = fatalfd, .events = POLLIN, .revents = 0, },
     };
     for (;;) {
-	try_(poll(pollfds, 3, -1));
+	try_(poll(pollfds, 4, -1));
 	if (pollfds[0].revents & POLLIN) read_controlfd(controlfd);
 	if (pollfds[0].revents & (POLLERR|POLLNVAL|POLLRDHUP|POLLHUP)) {
 	    close(controlfd);
@@ -121,14 +131,21 @@ int supervise(const int controlfd, const int statusfd) {
 	    */
             filicide_once();
 	}
-	if (pollfds[1].revents & POLLIN) {
-	    read_childfd(childfd, statusfd);
+	if (pollfds[1].revents & (POLLERR|POLLNVAL|POLLRDHUP|POLLHUP)) {
+	    // If the statusfd closes, we no longer care about writing child events,
+	    // but we don't want to actually close the controlfd yet.
+	    close(statusfd);
+	    pollfds[1].fd = -1;
+	    statusfd = -1;
 	}
 	if (pollfds[2].revents & POLLIN) {
+	    read_childfd(childfd, statusfd);
+	}
+	if (pollfds[3].revents & POLLIN) {
 	    read_fatalfd(fatalfd);
 	}
-	if ((pollfds[1].revents & (POLLERR|POLLHUP|POLLNVAL)) ||
-	    (pollfds[2].revents & (POLLERR|POLLHUP|POLLNVAL))) {
+	if ((pollfds[2].revents & (POLLERR|POLLHUP|POLLNVAL)) ||
+	    (pollfds[3].revents & (POLLERR|POLLHUP|POLLNVAL))) {
 	    errx(1, "Error event returned by poll for signalfd");
 	}
     }

@@ -13,6 +13,6 @@ py36 = with pkgs.python36Packages; buildPythonPackage {
   src = ./.;
   checkInputs = [ utillinux ];
   buildInputs = [ pkgconfig ];
-  propagatedBuildInputs = [ (import ../c) linuxfd sfork cffi dataclasses ];
+  propagatedBuildInputs = [ (import ../c) linuxfd sfork cffi dataclasses python-prctl ];
 };
 }

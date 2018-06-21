@@ -16,6 +16,7 @@ import typing as t
 import enum
 from dataclasses import dataclass
 import signal
+import prctl
 
 class ChildCode(enum.Enum):
     EXITED = lib.CLD_EXITED # child called _exit(2)
@@ -34,6 +35,17 @@ class ChildEvent:
     signal: t.Optional[signal.Signals]
     def died(self) -> bool:
         return self.code in [ChildCode.EXITED, ChildCode.KILLED, ChildCode.DUMPED]
+    def clean(self) -> bool:
+        return self.code == ChildCode.EXITED and self.exit_status == 0
+    def killed_with(self) -> signal.Signals:
+        """What signal was the child killed with?
+
+        Throws if the child was not killed with a signal.
+
+        """
+        if self.code not in [ChildCode.KILLED, ChildCode.DUMPED]:
+            raise Exception("Child wasn't killed with a signal")
+        return self.signal
     @classmethod
     def parse(cls, buf: bytes) -> 'ChildEvent':
         struct = ffi.cast('siginfo_t*', ffi.from_buffer(buf))
@@ -57,9 +69,6 @@ which = shutil.which
 supervise_libexec_location = sfork.to_bytes(shutil.which("supervise_libexec"))
 if not supervise_libexec_location:
     raise FileNotFoundError(errno.ENOENT, "Executable not found in PATH", "supervise_libexec")
-supervise_utility_location = which("supervise")
-if not supervise_utility_location:
-    raise FileNotFoundError(errno.ENOENT, "Executable not found in PATH", "supervise")
 
 def ignore_sigchld():
     """Mark SIGCHLD as SIG_IGN. Doing this explicitly prevents zombies."""
@@ -245,17 +254,22 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC) -> t.Tuple[int, int]:
 
     try:
         parent_side, child_side = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET|flags, 0)
+        # don't set O_CLOEXEC if the user didn't request it
+        if not (flags & O_CLOEXEC):
+            set_inheritable(parent_side.fileno(), True)
         commfd = bytes(str(child_side.fileno()), 'utf8')
         realargs = [supervise_utility_location, commfd, commfd] + args
         with sfork.subprocess() as supervise_proc:
             os.close(parent_side.fileno())
             os.setsid()
+            prctl.set_child_subreaper(True)
             with sfork.subprocess() as child_proc:
                 os.close(child_side.fileno())
                 if cwd:
                     os.chdir(cwd)
                 update_fds(fds)
-                child_proc.exec(sfork.to_bytes(executable), [sfork.to_bytes(arg) for arg in args], envp={**os.environ, **env})
+                child_proc.exec(sfork.to_bytes(executable), [sfork.to_bytes(arg) for arg in args],
+                                envp={**os.environ, **env})
             update_fds({0:child_side, 1:child_side})
             supervise_proc.exec(supervise_libexec_location, [], envp={})
         # we are now in the parent
@@ -285,7 +299,7 @@ class Process(object):
     """
     # pid - None if not yet received
     pid = None
-    # final ChildEvent - None if running or abruptly closed
+    # final ChildEvent for the main process - None if running or abruptly closed
     final_event: t.Optional[ChildEvent] = None
     # true if we are certain there are no more children left (only
     # false while running)
@@ -363,8 +377,8 @@ class Process(object):
         while self.get_event() is not None:
             pass
 
-    def wait(self) -> ChildEvent:
-        """Wait for process to exit."""
+    def wait_tree(self) -> ChildEvent:
+        """Wait for all processes in this tree to exit."""
         while not self.closed():
             _ = select.select([self], [], [])
             self.flush_events()
@@ -372,6 +386,16 @@ class Process(object):
             raise Exception("Process was abruptly closed, no final status available")
         else:
             return self.final_event
+
+    def wait(self) -> ChildEvent:
+        """Wait for the main process to exit."""
+        while True:
+            _ = select.select([self], [], [])
+            self.flush_events()
+            if self.closed():
+                raise Exception("Process was abruptly closed, no final status available")
+            elif self.final_event is not None:
+                return self.final_event
 
     def send_signal(self, signum: signal.Signals):
         """Send this signal to the main child process."""
@@ -381,7 +405,6 @@ class Process(object):
             raise TypeError("signum must be an integer: {}".format(signum))
         msg = ffi.new('struct supervise_send_signal*', {'pid':self.pid, 'signal':signum})
         buf = bytes(ffi.buffer(msg))
-        print(msg, buf)
         self.fd.send(buf)
 
     def terminate(self):
