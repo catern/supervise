@@ -12,6 +12,7 @@ py36 = with pkgs.python36Packages; buildPythonPackage {
   name = "supervise_api";
   src = ./.;
   checkInputs = [ utillinux ];
-  propagatedBuildInputs = [ (import ../c) linuxfd sfork ];
+  buildInputs = [ pkgconfig ];
+  propagatedBuildInputs = [ (import ../c) linuxfd sfork cffi dataclasses ];
 };
 }

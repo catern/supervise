@@ -3,5 +3,5 @@ with import <nixpkgs> {};
 stdenv.mkDerivation {
   name = "supervise";
   src = ./.;
-  buildInputs = [ autoconf automake autoreconfHook ];
+  buildInputs = [ autoconf automake pkgconfig autoreconfHook ];
 }

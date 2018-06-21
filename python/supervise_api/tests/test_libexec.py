@@ -67,8 +67,24 @@ class TestLibexec(unittest.TestCase):
         self.assertEqual(len(data), 0)
         os.close(r)
 
+    def just_run_and_wait(self, args):
+        r, w = os.pipe()
+        try:
+            proc = supervise_api.Process(args, fds={w:w})
+        except:
+            os.close(r)
+            os.close(w)
+            raise
+        os.close(w)
+        self.assertEqual(proc.wait(), 0)
+        proc.close()
+        # we should get eof because the process should be dead
+        data = os.read(r, 4096)
+        self.assertEqual(len(data), 0)
+        os.close(r)
+
     def test_basics(self):
-        self.just_run(["sh", "-c", "echo hi"])
+        self.just_run_and_wait(["sh", "-c", "echo hi"])
 
     # def test_abspath(self):
     #     sh_abspath = supervise_api.which("sh")

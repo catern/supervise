@@ -15,11 +15,7 @@
 #include <sys/signalfd.h>
 #include "common.h"
 #include "subreap_lib.h"
-
-struct send_signal {
-    pid_t pid;
-    int signal;
-};
+#include "supervise_protocol.h"
 
 bool called_filicide = false;
 
@@ -30,7 +26,7 @@ void filicide_once() {
     }
 }
 
-void handle_send_signal(struct send_signal signal) {
+void handle_send_signal(struct supervise_send_signal signal) {
     /* we can only safely kill a pid if it's our child */
     if (waitid(P_PID, signal.pid, NULL, WNOWAIT) == 0) {
         kill(signal.pid, signal.signal);
@@ -39,7 +35,7 @@ void handle_send_signal(struct send_signal signal) {
 
 void read_controlfd(const int controlfd) {
     int size;
-    struct send_signal signal;
+    struct supervise_send_signal signal;
     /* read a pid/signal pair to send */
     while ((size = try_(read(controlfd, &signal, sizeof(signal)))) > 0) {
 	/* NOTE we assume we don't get partial reads. This is fine
@@ -79,41 +75,23 @@ void read_childfd(int childfd, int statusfd) {
 	    }
 	    /* no child was in a waitable state */
 	    if (childinfo.si_pid == 0) break;
-            try_(write(statusfd, &childinfo, sizeof(childinfo)));
+            size_t written = try_(write(statusfd, &childinfo, sizeof(childinfo)));
+            /* We assume no partial writes since we're writing less
+             * than PIPE_BUF, but nevertheless... */
+            if (written != sizeof(childinfo)) {
+                errx(1, "Inexplicable partial write on statusfd");
+            }
         }
     }
 }
 
-struct options {
-    int controlfd;
-    int statusfd;
-};
-
-struct options
-get_options(int argc, char **argv) {
-    if (argc != 3) {
-	warnx("Usage: %s controlfd statusfd", (argv[0] ? argv[0] : "supervise_internal"));
-	exit(1);
-    }
-    const int controlfd = str_to_int(argv[1]);
-    if (controlfd >= 0) {
-	make_fd_cloexec_nonblock(controlfd);
-    }
-    const int statusfd = str_to_int(argv[2]);
-    if (statusfd >= 0) {
-	make_fd_cloexec_nonblock(statusfd);
-    }
-    const struct options opt = {
-	.controlfd = controlfd,
-	.statusfd = statusfd,
-    };
-    return opt;
+int main() {
+    const int controlfd = 0;
+    const int statusfd = 1;
+    supervise(opt.controlfd, opt.statusfd);
 }
 
-int main(int argc, char **argv) {
-    disable_sigpipe();
-    struct options opt = get_options(argc, argv);
-
+int supervise(const int controlfd, const int statusfd) {
     /* Check that this system is configured in such a way that we can
      * actually call filicide() and it will work. */
     sanity_check();

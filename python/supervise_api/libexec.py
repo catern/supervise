@@ -11,19 +11,50 @@ import select
 import signal
 import errno
 import sfork
+from supervise_api._raw import lib, ffi
+import typing as t
+import enum
+from dataclasses import dataclass
+import signal
+
+class ChildCode(enum.Enum):
+    EXITED = lib.CLD_EXITED # child called _exit(2)
+    KILLED = lib.CLD_KILLED # child killed by signal
+    DUMPED = lib.CLD_DUMPED # child killed by signal, and dumped core
+    STOPPED = lib.CLD_STOPPED # child stopped by signal
+    TRAPPED = lib.CLD_TRAPPED # traced child has trapped
+    CONTINUED = lib.CLD_CONTINUED # child continued by SIGCONT
+
+@dataclass
+class ChildEvent:
+    code: ChildCode
+    pid: int
+    uid: int
+    exit_status: t.Optional[int]
+    signal: t.Optional[signal.Signals]
+    def died(self) -> bool:
+        return code in [ChildCode.EXITED, ChildCode.KILLED, ChildCode.DUMPED]
+    @classmethod
+    def parse(cls, buf: bytes) -> 'ChildEvent':
+        struct = ffi.cast('siginfo_t*', ffi.from_buffer(buf))
+        code = ChildCode(struct.si_code)
+        pid = int(struct.si_pid)
+        uid = int(struct.si_uid)
+        if code is ChildCode.EXITED:
+            return cls(code, pid, uid, int(struct.si_status), None)
+        else:
+            return cls(code, pid, uid, None, signal.Signals(struct.si_status))
 
 O_CLOEXEC=os.O_CLOEXEC
 set_inheritable=os.set_inheritable
 fspath = os.fspath
 which = shutil.which
 
-def to_bytes(arg):
-    if isinstance(arg, str):
-        return bytes(arg, 'utf8')
-    else:
-        return arg
+# okay so args and env are at the base of the stack. hm.
+# so we could access them that way.
+# that's a bit silly though, let's just get it externally
 
-supervise_libexec_location = to_bytes(shutil.which("supervise_libexec"))
+supervise_libexec_location = sfork.to_bytes(shutil.which("supervise_libexec"))
 if not supervise_libexec_location:
     raise FileNotFoundError(errno.ENOENT, "Executable not found in PATH", "supervise_libexec")
 supervise_utility_location = which("supervise")
@@ -146,7 +177,7 @@ def update_fds(fds):
     for target in to_close:
         os.close(target)
 
-def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
+def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC) -> t.Tuple[int, int]:
     """Create an fd-managed process, and return the fd.
 
     See the documentation of the "supervise" utility for usage of the
@@ -183,7 +214,8 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
         Additional flags to set on the fd. Linux supports O_CLOEXEC, O_NONBLOCK.
     :type cwd: ``str``
 
-    :returns: int -- the new file descriptor for tracking the process
+    :returns: int, int: The new file descriptor for tracking the
+         process, and the pid of the new process.
 
     """
 
@@ -223,18 +255,10 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
                 if cwd:
                     os.chdir(cwd)
                 update_fds(fds)
-                # TODO update environment correctly
-                # hmm, this will be quite tricky for rsyscall I guess.
-                # but I guess it's fine.
-                child_proc.exec(to_bytes(executable), [to_bytes(arg) for arg in args], [], 0)
+                child_proc.exec(sfork.to_bytes(executable), [sfork.to_bytes(arg) for arg in args], envp={**os.environ, **env})
             set_inheritable(child_side.fileno(), True)
-            # TODO hmm so supervise now writes out a big complicated struct
-            # ah! I'll make a supervise library which embeds the libexec part.
-            # I'll follow the same strategy for rsyscall.
-            # I'll extract the standalone binary to a temporary file descriptor and run it.
-            # This solves the distribution problem.
-            # Although, there's still a bootstrapping problem.. to ssh over there, copy the binary over, and start it.
-            supervise_proc.exec(supervise_libexec_location, [supervise_libexec_location, commfd, commfd], [], 0)
+            # TODO this unnecessarily sets up arguments and an environment variable; we can just completely omit those
+            supervise_proc.exec(supervise_libexec_location, [], envp={})
         # we are now in the parent
         child_side.close()
     except:
@@ -265,24 +289,15 @@ class Process(object):
     # return code - positive if normal exit, negative if signalled, None if running
     returncode = None
     # true if we are certain there are no more children left (only
-    # false while running and on some unclean shutdowns)
+    # false while running)
     childfree = False
-    # true if we got a hangup, i.e., an unclean shutdown
-    hangup = False
     def __init__(self, *args, **kwargs):
         """Follows the same argument conventions as dfork
 
         Throws if it can't start up the process.
         """
-        self.fd = dfork(*args, **kwargs)
+        self.fd, self.pid = dfork(*args, **kwargs)
         self.fd.setblocking(0)
-
-        # wait for the pid to be available
-        while self.pid is None:
-            if self.closed():
-                raise Exception("starting process failed, couldn't even get pid")
-            _ = select.select([self], [], [])
-            self.flush_events()
 
     def closed(self):
         """Returns true if supervise communication fd is closed."""
@@ -306,7 +321,6 @@ class Process(object):
         if self.closed(): return None
         try:
             buf = self.fd.recv(4096)
-            print(buf)
             return buf
         except OSError as e:
             if e.errno == errno.EAGAIN:
@@ -319,47 +333,28 @@ class Process(object):
             else:
                 raise
 
-    def __parse_event(self, buf):
-        """Parse a single event"""
-        data = buf.rstrip().split(b" ")
-        msg = data[0]
-        code = int(data[1]) if len(data) > 1 else None
-        return (msg, code)
-
-    def __handle_event(self, msg, code):
+    def __handle_event(self, event: ChildEvent) -> None:
         """Handle a single event"""
-        # starting up
-        if msg == b"pid":
-            self.pid = code
-        # main child process exiting normally
-        elif msg == b"exited":
-            self.returncode = code
-        # main child process was signalled
-        elif msg == b"killed":
+        if event.pid != self.pid:
+            # we only care about the main pid, but get events for everything
+            return
+        if event.code == ChildCode.EXITED:
+            self.returncode = event.exit_status
+        elif event.code in [ChildCode.KILLED, ChildCode.DUMPED]:
             self.returncode = -code
-        elif msg == b"dumped":
-            self.returncode = -code
-        # notification about no children
-        elif msg == b"no_children":
-            self.childfree = True
-        # supervise exiting, in one of two ways
-        elif msg == b"terminating":
-            # normal termination
-            self.childfree = True
-            self.close()
-        elif msg == b"":
-            # hangup! This can only happen if supervise was SIGKILL'd (or worse)
-            self.hangup = True
-            self.close()
 
-    def get_event(self):
+    def get_event(self) -> t.Optional[ChildEvent]:
         """Return new event (oldest first), or None if no new events"""
         buf = self.__read_event()
         if buf is None:
             return None
-        msg, code = self.__parse_event(buf)
-        self.__handle_event(msg, code)
-        return (msg, code)
+        if buf == b"":
+            self.childfree = True
+            self.close()
+            return None
+        event = ChildEvent.parse(buf)
+        self.__handle_event(event)
+        return event
 
     def new_events(self):
         """Return iterator over unprocessed events."""
