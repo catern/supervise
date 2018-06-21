@@ -33,7 +33,7 @@ class ChildEvent:
     exit_status: t.Optional[int]
     signal: t.Optional[signal.Signals]
     def died(self) -> bool:
-        return code in [ChildCode.EXITED, ChildCode.KILLED, ChildCode.DUMPED]
+        return self.code in [ChildCode.EXITED, ChildCode.KILLED, ChildCode.DUMPED]
     @classmethod
     def parse(cls, buf: bytes) -> 'ChildEvent':
         struct = ffi.cast('siginfo_t*', ffi.from_buffer(buf))
@@ -256,8 +256,7 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC) -> t.Tuple[int, int]:
                     os.chdir(cwd)
                 update_fds(fds)
                 child_proc.exec(sfork.to_bytes(executable), [sfork.to_bytes(arg) for arg in args], envp={**os.environ, **env})
-            set_inheritable(child_side.fileno(), True)
-            # TODO this unnecessarily sets up arguments and an environment variable; we can just completely omit those
+            update_fds({0:child_side, 1:child_side})
             supervise_proc.exec(supervise_libexec_location, [], envp={})
         # we are now in the parent
         child_side.close()
@@ -286,8 +285,8 @@ class Process(object):
     """
     # pid - None if not yet received
     pid = None
-    # return code - positive if normal exit, negative if signalled, None if running
-    returncode = None
+    # final ChildEvent - None if running or abruptly closed
+    final_event: t.Optional[ChildEvent] = None
     # true if we are certain there are no more children left (only
     # false while running)
     childfree = False
@@ -309,7 +308,8 @@ class Process(object):
 
     def close(self):
         """Close the supervise communication fd, killing the process and all descendents."""
-        if self.returncode is None:
+        if self.final_event is None:
+            # synthesize a final event
             self.returncode = -signal.SIGKILL
         return self.fd.close()
 
@@ -338,10 +338,8 @@ class Process(object):
         if event.pid != self.pid:
             # we only care about the main pid, but get events for everything
             return
-        if event.code == ChildCode.EXITED:
-            self.returncode = event.exit_status
-        elif event.code in [ChildCode.KILLED, ChildCode.DUMPED]:
-            self.returncode = -code
+        if event.died():
+            self.final_event = event
 
     def get_event(self) -> t.Optional[ChildEvent]:
         """Return new event (oldest first), or None if no new events"""
@@ -365,26 +363,26 @@ class Process(object):
         while self.get_event() is not None:
             pass
 
-    ## Compatibility with Popen
-    def poll(self):
-        """Check if process has exited."""
-        self.flush_events()
-        return self.returncode
-
-    def wait(self):
+    def wait(self) -> ChildEvent:
         """Wait for process to exit."""
-        while self.returncode is None and not self.closed():
+        while not self.closed():
             _ = select.select([self], [], [])
             self.flush_events()
-        return self.returncode
+        if self.final_event is None:
+            raise Exception("Process was abruptly closed, no final status available")
+        else:
+            return self.final_event
 
-    def send_signal(self, signum):
+    def send_signal(self, signum: signal.Signals):
         """Send this signal to the main child process."""
         if self.closed():
             raise Exception("Communication fd is already closed")
         if not isinstance(signum, int):
             raise TypeError("signum must be an integer: {}".format(signum))
-        self.fd.send("signal {}".format(int(signum)).encode())
+        msg = ffi.new('struct supervise_send_signal*', {'pid':self.pid, 'signal':signum})
+        buf = bytes(ffi.buffer(msg))
+        print(msg, buf)
+        self.fd.send(buf)
 
     def terminate(self):
         """Terminate the main child process with SIGTERM.

@@ -27,8 +27,11 @@ void filicide_once() {
 }
 
 void handle_send_signal(struct supervise_send_signal signal) {
-    /* we can only safely kill a pid if it's our child */
-    if (waitid(P_PID, signal.pid, NULL, WNOWAIT) == 0) {
+    /* We can only safely kill a pid if it's our child, so we're just
+     * checking it's our child, not waiting for state changes. we are
+     * required to specify at least one kind of state change or we get
+     * EINVAL, though. */
+    if (waitid(P_PID, signal.pid, NULL, WEXITED|WNOHANG|WNOWAIT) >= 0) {
         kill(signal.pid, signal.signal);
     }
 }
@@ -85,17 +88,15 @@ void read_childfd(int childfd, int statusfd) {
     }
 }
 
-int main() {
-    const int controlfd = 0;
-    const int statusfd = 1;
-    supervise(opt.controlfd, opt.statusfd);
-}
-
 int supervise(const int controlfd, const int statusfd) {
+    disable_sigpipe();
     /* Check that this system is configured in such a way that we can
      * actually call filicide() and it will work. */
     sanity_check();
     atexit(filicide_once);
+
+    const int fl_flags = try_(fcntl(controlfd, F_GETFL));
+    try_(fcntl(controlfd, F_SETFL, fl_flags|O_NONBLOCK));
 
     /* We use signalfds for signal handling. Among other benefits,
      * this means we don't need to worry about EINTR. */
@@ -103,16 +104,15 @@ int supervise(const int controlfd, const int statusfd) {
     const int childfd = get_childfd();
 
     struct pollfd pollfds[3] = {
-	{ .fd = opt.controlfd, .events = POLLIN|POLLRDHUP, .revents = 0, },
+	{ .fd = controlfd, .events = POLLIN|POLLRDHUP, .revents = 0, },
 	{ .fd = childfd, .events = POLLIN, .revents = 0, },
 	{ .fd = fatalfd, .events = POLLIN, .revents = 0, },
     };
     for (;;) {
 	try_(poll(pollfds, 3, -1));
-	if (pollfds[0].revents & POLLIN) read_controlfd(opt.controlfd);
+	if (pollfds[0].revents & POLLIN) read_controlfd(controlfd);
 	if (pollfds[0].revents & (POLLERR|POLLNVAL|POLLRDHUP|POLLHUP)) {
-	    close(opt.controlfd);
-	    opt.controlfd = -1;
+	    close(controlfd);
 	    pollfds[0].fd = -1;
 	    /*
 	       If we see our controlfd close, it means our process was wanted at some
@@ -122,7 +122,7 @@ int supervise(const int controlfd, const int statusfd) {
             filicide_once();
 	}
 	if (pollfds[1].revents & POLLIN) {
-	    read_childfd(childfd, opt.statusfd);
+	    read_childfd(childfd, statusfd);
 	}
 	if (pollfds[2].revents & POLLIN) {
 	    read_fatalfd(fatalfd);
@@ -133,3 +133,10 @@ int supervise(const int controlfd, const int statusfd) {
 	}
     }
 }
+
+int main() {
+    const int controlfd = 0;
+    const int statusfd = 1;
+    supervise(controlfd, statusfd);
+}
+

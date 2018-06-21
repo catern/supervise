@@ -86,9 +86,9 @@ class TestLibexec(unittest.TestCase):
     def test_basics(self):
         self.just_run_and_wait(["sh", "-c", "echo hi"])
 
-    # def test_abspath(self):
-    #     sh_abspath = supervise_api.which("sh")
-    #     self.just_run([sh_abspath, "-c", "sleep inf"])
+    def test_abspath(self):
+        sh_abspath = supervise_api.which("sh")
+        self.just_run([sh_abspath, "-c", "sleep inf"])
 
     # def test_relpath(self):
     #     sh_relpath = os.path.relpath(supervise_api.which("sh"))
