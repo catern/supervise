@@ -140,6 +140,12 @@ def update_fds(fds):
     for target in to_close:
         os.close(target)
 
+def to_bytes(arg):
+    if isinstance(arg, str):
+        return bytes(arg, 'utf8')
+    else:
+        return arg
+
 def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
     """Create an fd-managed process, and return the fd.
 
@@ -206,12 +212,9 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
     args[0] = executable
 
     parent_side, child_side = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET|flags, 0)
-    # counteract Python's behavior of setting O_CLOEXEC by default
-    if not (flags & O_CLOEXEC):
-        set_inheritable(parent_side.fileno(), True)
     commfd = str(child_side.fileno())
     realargs = [supervise_utility_location, commfd, commfd] + args
-    with sfork.process() as subprocess:
+    with sfork.subprocess() as subproc:
         # we are now in the child
         os.close(parent_side.fileno())
         set_inheritable(child_side.fileno(), True)
@@ -220,24 +223,12 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
         os.environ.update(env)
         update_fds(fds)
         os.setsid()
-        subprocess.exec
-
-
-    # TOOD investigate why "ret == 0" makes supervise totally insane (it's an easy mistake)
-    if ret != 0:
-        # we don't care about the pid we just forked off
-        child_side.close()
-        return parent_side
-    # we are now in the child
-    parent_side.close()
-    set_inheritable(child_side.fileno(), True)
-    if cwd: os.chdir(cwd)
-    os.environ.update(env)
-    update_fds(fds)
-    # stop Ctrl-C on controlling terminal from killing subprocess prematurely
-    os.setsid()
-    os.execvp(realargs[0], realargs)
-
+        # TODO setup the environment...
+        byte_args = [to_bytes(arg) for arg in realargs]
+        subproc.exec(to_bytes(supervise_utility_location), byte_args, [], 0)
+    # we are now in the parent
+    child_side.close()
+    return parent_side
 
 class Process(object):
     """Run a new process and track it.
