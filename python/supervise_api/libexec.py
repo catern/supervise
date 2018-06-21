@@ -17,7 +17,13 @@ set_inheritable=os.set_inheritable
 fspath = os.fspath
 which = shutil.which
 
-supervise_libexec_location = shutil.which("supervise_libexec")
+def to_bytes(arg):
+    if isinstance(arg, str):
+        return bytes(arg, 'utf8')
+    else:
+        return arg
+
+supervise_libexec_location = to_bytes(shutil.which("supervise_libexec"))
 if not supervise_libexec_location:
     raise FileNotFoundError(errno.ENOENT, "Executable not found in PATH", "supervise_libexec")
 supervise_utility_location = which("supervise")
@@ -140,12 +146,6 @@ def update_fds(fds):
     for target in to_close:
         os.close(target)
 
-def to_bytes(arg):
-    if isinstance(arg, str):
-        return bytes(arg, 'utf8')
-    else:
-        return arg
-
 def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
     """Create an fd-managed process, and return the fd.
 
@@ -211,24 +211,37 @@ def dfork(args, env={}, fds={}, cwd=None, flags=O_CLOEXEC):
         raise OSError(errno.ENOENT, "Executable not found in PATH", args[0])
     args[0] = executable
 
-    parent_side, child_side = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET|flags, 0)
-    commfd = str(child_side.fileno())
-    realargs = [supervise_utility_location, commfd, commfd] + args
-    with sfork.subprocess() as subproc:
-        # we are now in the child
-        os.close(parent_side.fileno())
-        set_inheritable(child_side.fileno(), True)
-        if cwd:
-            os.chdir(cwd)
-        os.environ.update(env)
-        update_fds(fds)
-        os.setsid()
-        # TODO setup the environment...
-        byte_args = [to_bytes(arg) for arg in realargs]
-        subproc.exec(to_bytes(supervise_utility_location), byte_args, [], 0)
-    # we are now in the parent
-    child_side.close()
-    return parent_side
+    try:
+        parent_side, child_side = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET|flags, 0)
+        commfd = bytes(str(child_side.fileno()), 'utf8')
+        realargs = [supervise_utility_location, commfd, commfd] + args
+        with sfork.subprocess() as supervise_proc:
+            os.close(parent_side.fileno())
+            os.setsid()
+            with sfork.subprocess() as child_proc:
+                os.close(child_side.fileno())
+                if cwd:
+                    os.chdir(cwd)
+                update_fds(fds)
+                # TODO update environment correctly
+                # hmm, this will be quite tricky for rsyscall I guess.
+                # but I guess it's fine.
+                child_proc.exec(to_bytes(executable), [to_bytes(arg) for arg in args], [], 0)
+            set_inheritable(child_side.fileno(), True)
+            # TODO hmm so supervise now writes out a big complicated struct
+            # ah! I'll make a supervise library which embeds the libexec part.
+            # I'll follow the same strategy for rsyscall.
+            # I'll extract the standalone binary to a temporary file descriptor and run it.
+            # This solves the distribution problem.
+            # Although, there's still a bootstrapping problem.. to ssh over there, copy the binary over, and start it.
+            supervise_proc.exec(supervise_libexec_location, [supervise_libexec_location, commfd, commfd], [], 0)
+        # we are now in the parent
+        child_side.close()
+    except:
+        parent_side.close()
+        child_side.close()
+        raise
+    return parent_side, child_proc.pid
 
 class Process(object):
     """Run a new process and track it.
@@ -293,6 +306,7 @@ class Process(object):
         if self.closed(): return None
         try:
             buf = self.fd.recv(4096)
+            print(buf)
             return buf
         except OSError as e:
             if e.errno == errno.EAGAIN:

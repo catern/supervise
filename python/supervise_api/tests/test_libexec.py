@@ -68,7 +68,7 @@ class TestLibexec(unittest.TestCase):
         os.close(r)
 
     def test_basics(self):
-        self.just_run(["sh", "-c", "sleep inf"])
+        self.just_run(["sh", "-c", "echo hi"])
 
     # def test_abspath(self):
     #     sh_abspath = supervise_api.which("sh")
