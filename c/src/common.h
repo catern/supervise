@@ -18,8 +18,6 @@ int get_childfd(void);
 
 /* Marks SIGPIPE as ignored. */
 void disable_sigpipe(void);
-/* Sets O_CLOEXEC and O_NONBLOCK on the passed-in fd */
-void make_fd_cloexec_nonblock(int fd);
 /* Convert passed string to an integer */
 int str_to_int(char const* str);
 

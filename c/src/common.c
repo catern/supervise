@@ -54,14 +54,6 @@ void disable_sigpipe(void) {
     try_(sigaction(SIGPIPE, &sa, NULL));
 }
 
-void make_fd_cloexec_nonblock(const int fd) {
-    const int fd_flags = try_(fcntl(fd, F_GETFD));
-    try_(fcntl(fd, F_SETFD, fd_flags|FD_CLOEXEC));
-
-    const int fl_flags = try_(fcntl(fd, F_GETFL));
-    try_(fcntl(fd, F_SETFL, fl_flags|O_NONBLOCK));
-}
-
 int str_to_int(char const* str) {
     errno = 0;
     int ret = strtol(str, NULL, 10);
