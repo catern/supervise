@@ -11,3 +11,10 @@ supervise_LDADD = libcommon.a libsubreap.a
 
 unlinkwait_SOURCES = src/unlinkwait.c
 unlinkwait_LDADD = libcommon.a
+
+# Library
+pkgconfig_DATA = supervise.pc
+lib_LTLIBRARIES = libsupervise.la
+
+libsupervise_la_SOURCES = src/libsupervise.c
+include_HEADERS = src/supervise.h src/supervise_protocol.h
