@@ -8,10 +8,8 @@ import tempfile
 import fcntl
 import errno
 import sys
-
-py3 = sys.version_info[0] >= 3
-if py3:
-    import pathlib
+import pathlib
+import shutil
 
 def collect_children():
     collected = False
@@ -60,7 +58,7 @@ class TestSupervise(unittest.TestCase):
             raise
         os.close(w)
         proc.kill()
-        proc.wait()
+        self.assertEqual(proc.wait().killed_with(), signal.SIGKILL)
         proc.close()
         # we should get eof because the process should be dead
         data = os.read(r, 4096)
@@ -71,16 +69,15 @@ class TestSupervise(unittest.TestCase):
         self.just_run(["sh", "-c", "sleep inf"])
 
     def test_abspath(self):
-        sh_abspath = supervise_api.which("sh")
+        sh_abspath = shutil.which("sh")
         self.just_run([sh_abspath, "-c", "sleep inf"])
 
     def test_relpath(self):
-        sh_relpath = os.path.relpath(supervise_api.which("sh"))
+        sh_relpath = os.path.relpath(shutil.which("sh"))
         self.just_run([sh_relpath, "-c", "sleep inf"])
 
-    @unittest.skipIf(not py3, "requires Python3 pathlib")
     def test_pathlib_Path(self):
-        sh_path = pathlib.Path(supervise_api.which("sh"))
+        sh_path = pathlib.Path(shutil.which("sh"))
         self.just_run([sh_path, "-c", "sleep inf"])
 
     def test_sigchld_sigign(self):
@@ -200,21 +197,18 @@ class TestSupervise(unittest.TestCase):
     def test_setsid_and_nohup(self):
         self.multifork("nohup setsid sleep inf 2>/dev/null")
 
-    @unittest.skipIf(not py3, "requires get_inheritable from Python 3")
     def test_flags_default_cloexec(self):
         proc = supervise_api.Process(["sh", "-c", "sleep inf"])
         inheritable = os.get_inheritable(proc.fileno())
         proc.close()
         self.assertFalse(inheritable)
 
-    @unittest.skipIf(not py3, "requires get_inheritable from Python 3")
     def test_flags_yes_cloexec(self):
         proc = supervise_api.Process(["sh", "-c", "sleep inf"], flags=os.O_CLOEXEC)
         inheritable = os.get_inheritable(proc.fileno())
         proc.close()
         self.assertFalse(inheritable)
 
-    @unittest.skipIf(not py3, "requires get_inheritable from Python 3")
     def test_flags_no_cloexec(self):
         proc = supervise_api.Process(["sh", "-c", "sleep inf"], flags=0)
         inheritable = os.get_inheritable(proc.fileno())
