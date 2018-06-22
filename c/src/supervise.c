@@ -15,31 +15,39 @@
 #include <sys/signalfd.h>
 #include "common.h"
 #include "subreap_lib.h"
+#include "supervise_protocol.h"
 
-void handle_command(const char *command, const pid_t main_child_pid) {
-    uint32_t signal = -1;
-    if (sscanf(command, "signal %u\n", &signal) == 1) {
-	if (main_child_pid != -1) {
-	    try_(kill(main_child_pid, signal));
-	}
+bool called_filicide = false;
+
+void filicide_once() {
+    if (!called_filicide) {
+	filicide();
+        called_filicide = true;
     }
-    /* I can also safely send signals to all my immediate children.
-     * (of which I might have multiple, if something tried to daemonize)
-     * I don't see a use for that at the moment, though, so I haven't exposed it.
-     */
 }
 
-void read_controlfd(const int controlfd, const pid_t main_child_pid) {
+void handle_send_signal(struct supervise_send_signal signal) {
+    /* We can only safely kill a pid if it's our child, so we're just
+     * checking it's our child, not waiting for state changes. we are
+     * required to specify at least one kind of state change or we get
+     * EINVAL, though. */
+    if (waitid(P_PID, signal.pid, NULL, WEXITED|WNOHANG|WNOWAIT) >= 0) {
+        kill(signal.pid, signal.signal);
+    }
+}
+
+void read_controlfd(const int controlfd) {
     int size;
-    char buf[4096] = {};
-    while ((size = try_(read(controlfd, &buf, sizeof(buf)-1))) > 0) {
-	buf[size] = '\0';
-	/* NOTE we assume we get full lines, one line per read. This
-	 * is fine as long as we're using a transport which preserves
-	 * message boundaries, such as O_DIRECT pipes or SEQPACKET
-	 * Unix sockets. */
-	handle_command(buf, main_child_pid);
-	memset(buf, 0, sizeof(buf));
+    struct supervise_send_signal signal;
+    /* read a pid/signal pair to send */
+    while ((size = try_(read(controlfd, &signal, sizeof(signal)))) > 0) {
+	/* NOTE we assume we don't get partial reads. This is fine
+         * since we're reading/writing in quantities less than
+         * PIPE_BUF, so it's atomic. Nevertheless... */
+        if (size != sizeof(signal)) {
+            errx(1, "Inexplicable partial read from controlfd");
+        }
+	handle_send_signal(signal);
     }
 }
 
@@ -48,12 +56,16 @@ void read_fatalfd(const int fatalfd) {
     /* signalfds can't have partial reads */
     while (try_(read(fatalfd, &siginfo, sizeof(siginfo))) == sizeof(siginfo)) {
 	/* explicitly filicide, since dying from a signal won't call exit handlers */
-	filicide();
+        filicide_once();
 	/* we will now exit in read_childfd when we see we have no children left */
     }
 }
 
-void read_childfd(int childfd, int statusfd, pid_t* main_child_pid) {
+/* TODO ideally we would be able to write notifications for when
+ * children are reparented to us. then we could signal them... but
+ * maybe our owner already knows about our children through other
+ * sources? so we still allow signaling everything. */
+void read_childfd(int childfd, int statusfd) {
     struct signalfd_siginfo siginfo;
     /* signalfds can't have partial reads */
     while (try_(read(childfd, &siginfo, sizeof(siginfo))) == sizeof(siginfo)) {
@@ -62,124 +74,85 @@ void read_childfd(int childfd, int statusfd, pid_t* main_child_pid) {
 	    childinfo.si_pid = 0;
 	    const int ret = waitid(P_ALL, 0, &childinfo, WEXITED|WNOHANG);
 	    if (ret == -1 && errno == ECHILD) {
-		/* no more children. there's nothing else we can do, so we exit */
-		dprintf(statusfd, "no_children\n");
 		exit(0);
 	    }
 	    /* no child was in a waitable state */
 	    if (childinfo.si_pid == 0) break;
-
-	    /* we only report information for our main child */
-	    if (childinfo.si_pid != *main_child_pid) continue;
-	    /* The main child has exited. Set it to -1 so we don't try
-	     * and kill it if the user requests that. */
-	    *main_child_pid = -1;
-
-	    /* stringify the state change and print it */
-	    if (childinfo.si_code == CLD_EXITED) {
-		dprintf(statusfd, "exited %d\n", childinfo.si_status);
-	    } else if (childinfo.si_code == CLD_KILLED) {
-		dprintf(statusfd, "killed %d\n", childinfo.si_status);
-	    } else if (childinfo.si_code == CLD_DUMPED) {
-		dprintf(statusfd, "dumped %d\n", childinfo.si_status);
+	    // if statusfd is -1, we don't care about printing status messages
+	    if (statusfd != -1) {
+                size_t written = write(statusfd, &childinfo, sizeof(childinfo));
+		if (written == -1) {
+		    if (errno == EPIPE) {
+			// do nothing, we don't care if the other end hung up
+		    } else {
+			err(1, "Failed to write(statusfd, &childinfo, sizeof(childinfo))");
+		    }
+		} else if (written != sizeof(childinfo)) {
+		    /* We should not get any partial writes since we're writing less
+		     * than PIPE_BUF, but nevertheless... */
+                    errx(1, "Inexplicable partial write on statusfd");
+                }
 	    }
-	}
+        }
     }
 }
 
-struct options {
-    char *exec_file;
-    char **exec_argv;
-    int controlfd;
-    int statusfd;
-};
-
-struct options
-get_options(int argc, char **argv) {
-    if (argc < 4) {
-	warnx("Usage: %s controlfd statusfd command [args [args [args...]]]", (argv[0] ? argv[0] : "procfd"));
-	exit(1);
-    }
-    const int controlfd = str_to_int(argv[1]);
-    if (controlfd >= 0) {
-	make_fd_cloexec_nonblock(controlfd);
-    }
-    const int statusfd = str_to_int(argv[2]);
-    if (statusfd >= 0) {
-	make_fd_cloexec_nonblock(statusfd);
-    }
-    const struct options opt = {
-	.exec_file = argv[3],
-	.exec_argv = argv+3,
-	.controlfd = controlfd,
-	.statusfd = statusfd,
-    };
-    return opt;
-}
-
-int main(int argc, char **argv) {
+int supervise(const int controlfd, int statusfd) {
     disable_sigpipe();
-    struct options opt = get_options(argc, argv);
-
     /* Check that this system is configured in such a way that we can
      * actually call filicide() and it will work. */
     sanity_check();
-    bool called_filicide = false;
-    void handle_exit(void) {
-	if (!called_filicide) filicide();
-	dprintf(opt.statusfd, "terminating\n");
-    };
-    atexit(handle_exit);
+    atexit(filicide_once);
 
-    try_(prctl(PR_SET_CHILD_SUBREAPER, true));
-
-    const sigset_t original_blocked_signals = get_blocked_signals();
     /* We use signalfds for signal handling. Among other benefits,
      * this means we don't need to worry about EINTR. */
     const int fatalfd = get_fatalfd();
     const int childfd = get_childfd();
 
-    pid_t main_child_pid = try_(fork());
-    if (main_child_pid == 0) {
-	/* the child will automatically get sigterm when the parent dies;
-	 * a last-ditch effort to be effective even if we get SIGKILL'd */
-	prctl(PR_SET_PDEATHSIG, SIGTERM);
-	/* restore the signal mask */
-	try_(sigprocmask(SIG_SETMASK, &original_blocked_signals, NULL));
-	try_(execvp(opt.exec_file, opt.exec_argv));
-    }
-
-    dprintf(opt.statusfd, "pid %d\n", main_child_pid);
-
-    struct pollfd pollfds[3] = {
-	{ .fd = opt.controlfd, .events = POLLIN|POLLRDHUP, .revents = 0, },
+    struct pollfd pollfds[4] = {
+	{ .fd = controlfd, .events = POLLIN|POLLRDHUP, .revents = 0, },
+	{ .fd = statusfd, .events = POLLHUP, .revents = 0, },
 	{ .fd = childfd, .events = POLLIN, .revents = 0, },
 	{ .fd = fatalfd, .events = POLLIN, .revents = 0, },
     };
     for (;;) {
-	try_(poll(pollfds, 3, -1));
-	if (pollfds[0].revents & POLLIN) read_controlfd(opt.controlfd, main_child_pid);
+	try_(poll(pollfds, 4, -1));
+	if (pollfds[0].revents & POLLIN) read_controlfd(controlfd);
 	if (pollfds[0].revents & (POLLERR|POLLNVAL|POLLRDHUP|POLLHUP)) {
-	    close(opt.controlfd);
-	    opt.controlfd = -1;
+	    close(controlfd);
 	    pollfds[0].fd = -1;
 	    /*
 	       If we see our controlfd close, it means our process was wanted at some
 	       time, but no longer. We will stick around until we have finished writing
 	       status messages for killing all our children.
 	    */
-	    filicide();
-	    called_filicide = true;
+            filicide_once();
 	}
-	if (pollfds[1].revents & POLLIN) {
-	    read_childfd(childfd, opt.statusfd, &main_child_pid);
+	if (pollfds[1].revents & (POLLERR|POLLNVAL|POLLRDHUP|POLLHUP)) {
+	    // If the statusfd closes, we no longer care about writing child events,
+	    // but we don't want to actually close the controlfd yet.
+	    close(statusfd);
+	    pollfds[1].fd = -1;
+	    statusfd = -1;
 	}
 	if (pollfds[2].revents & POLLIN) {
+	    read_childfd(childfd, statusfd);
+	}
+	if (pollfds[3].revents & POLLIN) {
 	    read_fatalfd(fatalfd);
 	}
-	if ((pollfds[1].revents & (POLLERR|POLLHUP|POLLNVAL)) ||
-	    (pollfds[2].revents & (POLLERR|POLLHUP|POLLNVAL))) {
+	if ((pollfds[2].revents & (POLLERR|POLLHUP|POLLNVAL)) ||
+	    (pollfds[3].revents & (POLLERR|POLLHUP|POLLNVAL))) {
 	    errx(1, "Error event returned by poll for signalfd");
 	}
     }
 }
+
+int main() {
+    const int controlfd = 0;
+    const int statusfd = 1;
+    const int fl_flags = try_(fcntl(controlfd, F_GETFL));
+    try_(fcntl(controlfd, F_SETFL, fl_flags|O_NONBLOCK));
+    supervise(controlfd, statusfd);
+}
+
