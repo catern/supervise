@@ -1,0 +1,75 @@
+* TODO embed supervise binary in libsupervise
+  This is useful because then the user just needs to link against libsupervise,
+  and then can pull the supervise executable out of it and push it into a file that can then be exec'd,
+  instead of having to find it on the PATH.
+
+  I will just export it as an array that I make with xxd -i, I guess?
+
+** downloading executable to file from in-memory array
+   Maybe there's a better way, copy-file-range or something.
+* performing filicide external to supervise
+  We could just completely delete the filicide code from supervise.
+  All of it could be done externally.
+
+  All we really need is for some process to exist with CHILD_SUBREAPER set,
+  and for that process to not wait on its children.
+  We can achieve the latter by just suspending supervise,
+  and the former would be now totally orthogonal to supervise.
+  Once we have this, we can just walk the pid tree ourselves in the parent.
+
+  supervise's role in this world would shrink to only be writing out child status changes,
+  and reading in signals to send.
+
+  The major obstacle, I think, is that this loses the big guarantee about process termination!
+  If the parent process has to handle filiciding itself,
+  then it might forget to do it!
+
+  Also, it's a little weird to use a signal to suspend supervise...
+  maybe it'd be a different message type or something.
+
+  But, on the plus side,
+  theoretically this role of supervise would be minimal enough to be upstreamable.
+  It would be a "child group fd".
+  Rather than a clonefd...
+  
+  Just kinda weird.
+
+  capsicum solves the recursive killing problem by enforcing usage of procfds.
+  If something's killed, its procfds close, so all its children die too, unless they've been sent elsewhere.
+  But I can't force traditional applications to manage the lifecycle of procfds, sadly.
+* Running supervise in a thread
+  Threads and processes are both tasks in Linux,
+  so each task can have its own children.
+
+  We'd need to use waitid(__WNOTHREAD) in the whole application to avoid any thread waiting on the children of other threads.
+
+  On the plus side, since all the threads would be in the same address space and language,
+  we can use an actually structured and type-safe communiatin protocol.
+
+  However there are still a bunch of difficulties:
+** fd table unsharing
+   This would be useful so we can get informed when all children are exited and the supervise thread exits.
+
+   So I'd *probably* set CLONE_FILES?
+** exit is system call
+   So I couldn't register atexit, I'd have to make my own way to exit the thread.
+
+   Or just do filicide externally, and forbid exiting...
+** signal handling
+   This is a major issue:
+   If the main thread gets a signal and terminates,
+   we die without a chance to handle stuff.
+
+   But, I guess we could intercept all signals in the main thread and be extra sure.
+
+   We would probably want to do the external-filicide approach if we ran supervise in a thread.
+   It has nice simplicity and centralization advantages,
+   and the disadvantages of it are already shared by the supervise-in-a-thread-concept
+   (difficulty guaranteeing that all child processes are dead)
+
+   I wonder, can I share memory with a task without being in the same thread group?
+   So a SIGKILL doesn't kill us all?
+
+   Then it would be quite interesting.
+   I'd be able to do structured communication with shared memory,
+   but have signal and file descriptor isolation.

@@ -1,0 +1,81 @@
+* Summary
+
+This provides a superior API for process management and supervision on Linux,
+in the form of a minimal and unprivileged executable "supervise".
+supervise is designed to be used as a wrapper for child processes you execute.
+Therefore supervise is designed to only wake up when there is an event to be handled,
+and it otherwise consumes no CPU time.
+
+There are three main benefits of using supervise to wrap child processes:
+
+- The ability to get notified of child process exit or status change through a file descriptor interface
+- Automatic termination of your child processes when you exit (by virtue of the fd interface)
+- Guaranteed termination of all the transitive children of a child
+  process; no possibility of orphans lingering on the system
+
+It is a fully supported design goal for supervise to be usable in a nested way.
+You can wrap a child process with `supervise` which in turn forks off more child processes and wraps them in `supervise`,
+in arbitrary configurations and depths.
+
+* Behavior
+When supervise is exec'd, it expects to have a stdin, stdout, and stderr.
+supervise further expects to have some number of child processes already started (and it provides no mechanism to start more).
+And most importantly, supervise expects to have already had =CHILD_SUBREAPER= turned on through =prctl=.
+
+Once supervise starts up, supervise has three primary functions:
+** Read from stdin and send the specified signals to child processes
+supervise reads from stdin,
+parsing the input as =struct supervise_send_signal=.
+This instructs supervise to send a specific signal to a specific pid.
+supervise checks if that pid is an immediate child of supervise, and if it is, then supervise sends the signal to that pid.
+Otherwise it does nothing.
+** Write child process status changes to stdout
+supervise waits for any of its immediate children to change status,
+and writes the child status changes to stdout,
+in the form of =siginfo_t= structures as returned by =waitid=.
+** When stdin closes, SIGKILL all transitive child processes and exit
+When stdin closes, supervise exits.
+If supervise exits for any reason, it first SIGKILLs all its transitive child processes.
+* Invocation and use
+supervise takes no arguments and reads no environment variables, so those need not be supplied.
+
+While supervise is a standalone executable,
+it cannot practically be used from the shell;
+usage requires more fine grained control over file descriptors than the shell provides.
+Thus it is primarily useful when used as part of a library in a programming language.
+
+One interface for such a library could be something like this:
+
+#+BEGIN_SRC
+spawnfd : string list -> file_descriptor
+#+END_SRC
+
+which, making use of [[https://github.com/catern/sfork][sfork]], is implemented in Python something like this:
+
+#+BEGIN_SRC python
+def spawnfd(args: List[str]) -> int:
+    parent_side, supervise_side = socketpair(AF_UNIX, SOCK_CLOEXEC)
+    with sfork.subprocess() as supervise_proc:
+        prctl.set_child_subreaper(True)
+        parent_side.close()
+        with sfork.subprocess() as child_proc:
+            supervise_side.close()
+            child_proc.exec(args[0], args)
+        supervise_side.dup2(0)
+        supervise_side.dup2(1)
+        supervise_proc.exec(supervise_utility_location, [])
+    supervise_side.close()
+    return parent_side
+#+END_SRC
+
+An implementation with traditional =fork= is also possible.
+
+* libsupervise
+
+To get the definition of =struct supervise_send_signal=,
+so you can send it to supervise's stdin to signal its children,
+you can link against libsupervise and include =supervise.h=.
+
+* References and inspiration
+
+See [[http://catern.com/posts/fork.html][my blog post]] about the Unix process API for more.
