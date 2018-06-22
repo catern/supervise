@@ -14,4 +14,5 @@ setup(name='supervise_api',
       author='catern',
       author_email='sbaugh@catern.com',
       license='MIT',
+      cffi_modules=["ffibuilder.py:ffibuilder"],
       packages=['supervise_api', 'supervise_api.tests'])
