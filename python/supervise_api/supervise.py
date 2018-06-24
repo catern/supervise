@@ -244,7 +244,7 @@ def dfork(args: t.List[t.Union[bytes, str, os.PathLike]], env={}, fds={}, cwd=No
     args[0] = executable
 
     try:
-        parent_side, child_side = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET|flags, 0)
+        parent_side, supervise_side = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET|flags, 0)
         # don't set O_CLOEXEC if the user didn't request it
         if not (flags & os.O_CLOEXEC):
             os.set_inheritable(parent_side.fileno(), True)
@@ -253,19 +253,19 @@ def dfork(args: t.List[t.Union[bytes, str, os.PathLike]], env={}, fds={}, cwd=No
             os.setsid()
             prctl.set_child_subreaper(True)
             with sfork.subprocess() as child_proc:
-                os.close(child_side.fileno())
+                os.close(supervise_side.fileno())
                 if cwd:
                     os.chdir(cwd)
                 update_fds(fds)
                 child_proc.exec(sfork.to_bytes(executable), [sfork.to_bytes(arg) for arg in args],
                                 envp={**os.environ, **env})
-            update_fds({0:child_side, 1:child_side})
+            update_fds({0:supervise_side, 1:supervise_side})
             supervise_proc.exec(supervise_utility_location, [], envp={})
         # we are now in the parent
-        child_side.close()
+        supervise_side.close()
     except:
         parent_side.close()
-        child_side.close()
+        supervise_side.close()
         raise
     return parent_side, child_proc.pid
 
@@ -428,3 +428,146 @@ class Process:
     def __exit__(self, exc_type, exc_value, traceback):
         """Context manager protocol method; destructs the class, killing the process"""
         self.fd.close()
+
+class SupervisedContext:
+    def __init__(self, process: ProcessContext, parent_process: ProcessContext) -> None:
+        self.process = process
+        self.parent_process = parent_process
+        self.pid: t.Optional[int] = None
+
+    def _can_syscall(self) -> None:
+        if current_process is not self.process:
+            raise Exception("My syscall interface is not currently operating on my process, "
+                            "did you fork again and call exit/exec out of order?")
+        if self.pid is not None:
+            raise Exception("Already left this process")
+
+    def exit(self, status: int) -> None:
+        self._can_syscall()
+        self.pid = sfork_exit(status)
+        global current_process
+        current_process = self.parent_process
+
+    def exec(self, pathname: os.PathLike, argv: t.List[t.Union[str, bytes]],
+             *, envp: t.Optional[t.Dict[str, str]]=None) -> None:
+        self._can_syscall()
+        if envp is None:
+            envp = os.environ
+        self.pid = sfork_execveat(to_bytes(os.fspath(pathname)), [to_bytes(arg) for arg in argv],
+                                  serialize_environ(**envp), flags=0)
+        global current_process
+        current_process = self.parent_process
+
+class SuperviseContext:
+    pass
+
+# oh hey neato
+# this allows supervise to work with any existing Python process launching API.
+# that's pretty impressive!
+# although, the APIs will get confused when the processes don't show up as their children...
+
+# and I can do two more contextmanagers like this:
+# one which kills everything on exit,
+# and one which blocks until everything exits - nursery-style
+# I can even completely provide the nursery API
+# except, it's possible for people to create processes other than by calling into me.
+# but it will work fine.
+# hmm. when I spawn a process, obviously it spawns with supervise...
+# and that cleans it up...
+@contextmanager
+def supervise():
+    context = SuperviseContext()
+    parent_side, supervise_side = socket.socketpair(
+        socket.AF_UNIX, socket.SOCK_SEQPACKET|os.O_CLOEXEC, 0)
+    try:
+        with sfork.subprocess() as supervise_proc:
+            os.close(parent_side.fileno())
+            os.setsid()
+            prctl.set_child_subreaper(True)
+            # should I catch an exception here and still exec supervise?
+            # yes, they may have exec'd a subprocess and then thrown, which requires cleanup.
+            try:
+                yield SuperviseContext()
+            finally:
+                # regardless of whether an exception was thrown, we still launch supervise;
+                # we need to collect any child processes
+                update_fds({0:supervise_side, 1:supervise_side})
+                supervise_proc.exec(supervise_utility_location, [], envp={})
+        # we are now in the parent
+        supervise_side.close()
+    except:
+        # if an exception was thrown, we want to give supervise the
+        # chance to kill everything.
+        supervise_side.close()
+        parent_side.wait_for_hangup()
+        parent_side.close()
+        raise
+    sfork()
+    current_process = ProcessContext()
+    context = SubprocessContext(current_process, parent_process)
+    try:
+        yield context
+    finally:
+        if context.pid is None:
+            context.exit(0)
+
+@contextmanager
+def cleanup_child_processes():
+    """At the end of the context, kills absolutely all transitive child processes.
+
+    Works with any process API. Neat!
+
+    """
+    parent_side, supervise_side = socket.socketpair(
+        socket.AF_UNIX, socket.SOCK_SEQPACKET|os.O_CLOEXEC, 0)
+    try:
+        with sfork.subprocess() as supervise_proc:
+            os.close(parent_side.fileno())
+            # prevent Ctrl-C from spuriously killing our children
+            os.setsid()
+            prctl.set_child_subreaper(True)
+            try:
+                yield
+            finally:
+                # regardless of whether an exception was thrown, we still launch supervise;
+                # we need to collect any child processes
+                update_fds({0:supervise_side, 1:supervise_side})
+                supervise_proc.exec(supervise_utility_location, [], envp={})
+    finally:
+        # TODO hmm, it's a bit weird to pass in these sockets when we immediately close them...
+        supervise_side.close()
+        parent_side.close()
+
+# so we'll have a nursery-style API with async, which blocks until everything's done.
+# but, we also want the... exit codes? of the processes?
+# oh, no, we don't
+# they throw an exception if they exit non-zero.
+# that is fine and good.
+# we probably want to be able to say what processes we actually care about.
+# hmm, and we actually need to start supervise first to get the notifications.
+# so, that won't work.
+# we can't start things under supervise and get notifications for them at the same time.
+@contextmanager
+def wait_on_child_processes():
+    parent_side, supervise_side = socket.socketpair(
+        socket.AF_UNIX, socket.SOCK_SEQPACKET|os.O_CLOEXEC, 0)
+    try:
+        with sfork.subprocess() as supervise_proc:
+            os.close(parent_side.fileno())
+            os.setsid()
+            prctl.set_child_subreaper(True)
+            # should I catch an exception here and still exec supervise?
+            # yes, they may have exec'd a subprocess and then thrown, which requires cleanup.
+            try:
+                yield
+            finally:
+                # regardless of whether an exception was thrown, we still launch supervise;
+                # we need to collect any child processes
+                update_fds({0:supervise_side, 1:supervise_side})
+                supervise_proc.exec(supervise_utility_location, [], envp={})
+        # we are now in the parent
+        supervise_side.close()
+    finally:
+        supervise_side.close()
+        parent_side.wait_for_hangup()
+        parent_side.close()
