@@ -73,3 +73,291 @@
    Then it would be quite interesting.
    I'd be able to do structured communication with shared memory,
    but have signal and file descriptor isolation.
+* file descriptor handling
+  I'll require pre-allocating any hard-coded fd numbers that you want to dup2 over.
+
+  CLOEXEC will still be set globally, and I'll have to un-CLOEXEC in the child.
+
+  And I'll... update the file descriptors somehow.
+
+  Or maybe the fds will just have references to the syscall interface?
+
+  But then how do I deal with the issue where I allocate an fd inside a subprocess?
+  and return it...
+
+  That would, ideally, be solved by linear types and regions and so on.
+
+  But what would the fds having a reference to the syscall interface look like,
+  in a world with linear types and regions and so on?
+
+  Oh also I could make a new syscall interface inside the child process.
+
+  The concept of having references to file objects,
+  and updating the file descriptor numbers the file objects contain,
+  is tempting, but so complicated.
+
+  With linear types I guess you would just bundle all your file objects into the sfork.
+
+  Hmm.
+  So you can't actually return file descriptors from the sfork.
+  
+  Which, I guess we can ascerta
+
+
+  it's kind of like unshare
+
+  I can unshare to a new mount namespace, set things up, get some paths
+  and the paths that I have from the starting namespace are still valid, at least at the start,
+
+  and then setns back to the starting namespace, and I've got paths from the new namespace which are not valid in the starting namespace.
+
+  that kind of suggests a need for more sophistication around namespaces.
+
+  maybe I shouldn't have a process object, but rather, a FileDescriptorTable object.
+
+  and no Host object, but rather a MountNamespace object.
+
+  y'know, split them up into their individual namespaces.
+
+  then just as I have an in_new_process contextmanager,
+  I can have an in_new_container contextmanager :)
+
+  both of which set up a bunch of namespaces.
+
+  of course I will still be able to set up the namespaces individually
+
+  So would a socket be both relative to a CLONE_FILES and a CLONE_NET?
+
+  I guess it would.
+
+
+  But what would?
+
+  I guess I'd have a shadow socket object which holds this information.
+  And that would be the thing to inherit from ReadableFile and WritableFile and so on...
+  And would reference the network namespace it existed within.
+  And the network interface too?
+  That's what exists in the kernel so that's what should exist in my application.
+
+  And it'd hold a reference to a file descriptor number?
+  Which would be the thing that would be relative to CLONE_FILES.
+  Very much like CLONE_VM...
+
+  Oh I guess a given SyscallInterface would be within a bunch of namespaces like CLONE_NET and CLONE_FILES
+
+  And a file descriptor would be inside a certain clone_files...
+
+  OK!
+  It's time to decide.
+
+  Do file objects care about the file descriptor object they use for access?
+
+  Or do they not?
+
+  I guess they do not.
+
+
+  hmm so I'm writing a nice, low-level interface to the Linux syscall interface in Python,
+  which I anticipate I'd eventually port to cloudabi,
+  and I ask here for small amount of advice.
+
+  I'm wondering about how to handle, when I unshare CLONE_FILES,
+  how should I handle informing higher-level file objects that their underlying file descriptors might change
+  which is something that happens 
+
+  hmm.
+
+  but actually when I do dup2 it all just works fine.
+
+  the thing is that when I unshare CLONE_FILES,
+  all the dup2s I perform,
+  get undone.
+
+  it's kind of like unsharing your address space.
+
+  oh hey
+
+  it's like fork(), heh
+  except fork also insulates your address space.
+
+  does this mean maybe I should share my fd space?
+
+
+  Ok so I can't figure out how to handle objects automatically moving between heaps?
+
+  I guess under-the-hood makes sense.
+
+  I have some set of fds in the current process thing,
+  which have references back to their file objects,
+  and I swap 'em all out from underneath.
+
+  Then I can just easily, eh...
+
+  So it really is a memory management problem, right?
+
+  Except I'm explitily managing it at the user level
+
+  And, we move between heaps.
+
+  So if it was pointers,
+  I'd need to rewrite the pointers.
+
+  I guess I'd need to do a stop and copy rewrite of pointers.
+
+  I'm not moving between heaps for GC though,
+  just for process management.
+
+  OK.
+  So maybe I can model it with some function that says,
+  "move fds into other CLONE_FILES space and put me in that CLONE_FILES space".
+
+  Something like that anyway.
+
+  Copy current CLONE_FILES space?
+  Then where does it go...
+  Then make it the currently accessible one through some SI?
+
+  That makes some sense as a primitive.
+  
+  Then how do I handle the heap object movement?
+  Well, er.
+
+  OK so let's model this as memory management.
+
+  I have some number of mutable "memory"s.
+  Each memory supports reading and writing address, read: Address -> Word and write: (Address, Word) -> ().
+  I want to have fully-specified references to addresses inside the memory: an Address combined with a Memory,
+  so that I can't use an Address with the wrong Memory.
+  I'll use these FullySpecifiedAddresses ubiquitously. (I don't care about the redundancy/extra space usage they imply)
+
+  Then I want to support copying a memory.
+  All the addresses in the old memory are still valid in the new memory.
+  How do I model this with my FullySpecifiedAddresses?
+  How do I represent that
+  
+
+  whic
+  I ma
+
+  I make a copy of that memory.
+  I would like to have a type-safe
+
+
+  Manual conversion! It's the easiest.
+
+  We'll have a method on the subproc which takes a file object from the parent,
+  and converts it into the child.
+
+  Then I can return to the concept of,
+  objects that own the file descriptors.
+
+  No separate file objects and file descriptors.
+
+  Seems good and fine.
+
+  OK
+  My three things are:
+
+  dup2 takes a file descriptor object and never ever takes a number
+  subproc has a method to convert objects from the parent process to the child process
+  cloexec is on by default, and unset manually when creating a new process
+
+  Can any of these things be implemented in supervise?
+
+  No. We need a file descriptor handling library.
+
+  Maybe we should have that be a separate low-level library for it.
+
+  Hummmm....
+
+  Nahh....
+
+  now we need to think of a good name for this IO library!
+
+  ciao seems good. nah it's too punny.
+
+  python + Linux
+
+  pynux
+
+  linus
+  linux
+  python
+
+  lython
+
+  penguin
+
+  pyguin
+
+  what would be the nice thing to be able to import?
+
+  import linux
+  linux.pipe()
+
+  import syscall
+  syscall.pipe()
+
+  import lin
+
+  a language based system for Linux
+
+  python/Linux
+
+  I'll wait for Kai. He will help me decide on a good name. 'v'
+  We'll call it "lion" for now.
+  
+  The organization will be like this:
+
+  We'll have lion_asyncio, lion_trio, and any others.
+
+  They'll depend on lion (un-suffixed)
+  and contain lion.asyncio, lion.trio, etc,
+  and provide methods for bootstrapping a syscall-interface with the appropriate event loop.
+
+  Then we'll have lion.rsyscall which provides the necessary adapter between rsyscall and lion.
+  It will take in lion socket types and such things to set up the rsyscall server. 
+  Or I guess it'll take in something abstract so we can support windows et al.
+
+  Should lion by itself depend on the C libraries?
+  No, that should be separate so that lion itself is completely pure.
+
+  Oh, I guess there's a distinction between,
+  the SyscallInterface and the IO library built on top.
+
+  Things implementing the SyscallInterface can just depend on the IO library I guess?
+
+  We'll have this all in one repository.
+  And maybe I guess we can provide different packages.
+
+  The immediately achievable part is the IO library on top of trio on top of whatever native bindings I need to make.
+
+  So, components:
+  lion.core: pure core making use of SI to provide an IO library
+  lion.trio: SyscallInterface based on trio; depends on trio and native libraries
+  lion.asyncio: SyscallInterface based on asyncio; depends on asyncio and native libraries
+  lion.rsyscall: SyscallInterface based on rsyscall; depends on rsyscall; takes an abstract interface for IO
+
+  Do the latter depend on the pure core?
+  Yes, I think so, that's fine.
+  Or.. maybe...
+
+  lion.native: Helpers for making a native SyscallInterface; depends on native libraries.
+
+  We'll just put these all in the same Python package with a ton of deps for now.
+
+  rsyscall is still a separate C library, of course.
+  Does it need a separate Python wrapper?
+  I don't think so. It isn't too useful without the SyscallInterface, right?
+
+  lion.rsyscall could be separated out into the sans-IO part,
+  and the part that actually depends on the native rsyscall library and provides helpers for working with it.
+  lion.rsyscall.core
+  lion.rsyscall.helpers
+
+  The helpers make an rsyscall process.
+
+  So for now I'll write lion.trio and then on top of it write lion.core.
+* applications
+  sans-io IO library
+  making containers
