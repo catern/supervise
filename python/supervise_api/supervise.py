@@ -30,6 +30,9 @@ class ChildCode(enum.Enum):
     TRAPPED = lib.CLD_TRAPPED # traced child has trapped
     CONTINUED = lib.CLD_CONTINUED # child continued by SIGCONT
 
+class UncleanExit(Exception):
+    pass
+
 @dataclass
 class ChildEvent:
     code: ChildCode
@@ -41,6 +44,13 @@ class ChildEvent:
         return self.code in [ChildCode.EXITED, ChildCode.KILLED, ChildCode.DUMPED]
     def clean(self) -> bool:
         return self.code == ChildCode.EXITED and self.exit_status == 0
+
+    def check(self) -> None:
+        if self.clean():
+            return None
+        else:
+            raise UncleanExit(self)
+
     def killed_with(self) -> signal.Signals:
         """What signal was the child killed with?
 
@@ -60,6 +70,22 @@ class ChildEvent:
             return cls(code, pid, uid, int(struct.si_status), None)
         else:
             return cls(code, pid, uid, None, signal.Signals(struct.si_status))
+
+class ChildEventBuffer:
+    def __init__(self):
+        self.buf = bytes()
+
+    def feed(self, data: bytes):
+        self.buf += data
+
+    def consume(self) -> t.Optional[ChildEvent]:
+        size = ffi.sizeof('siginfo_t')
+        if len(self.buf) >= size:
+            ret = ChildEvent.parse(self.buf)
+            self.buf = self.buf[size:]
+            return ret
+        else:
+            return None
 
 def ignore_sigchld():
     """Mark SIGCHLD as SIG_IGN. Doing this explicitly prevents zombies."""
@@ -429,38 +455,6 @@ class Process:
         """Context manager protocol method; destructs the class, killing the process"""
         self.fd.close()
 
-class SupervisedContext:
-    def __init__(self, process: ProcessContext, parent_process: ProcessContext) -> None:
-        self.process = process
-        self.parent_process = parent_process
-        self.pid: t.Optional[int] = None
-
-    def _can_syscall(self) -> None:
-        if current_process is not self.process:
-            raise Exception("My syscall interface is not currently operating on my process, "
-                            "did you fork again and call exit/exec out of order?")
-        if self.pid is not None:
-            raise Exception("Already left this process")
-
-    def exit(self, status: int) -> None:
-        self._can_syscall()
-        self.pid = sfork_exit(status)
-        global current_process
-        current_process = self.parent_process
-
-    def exec(self, pathname: os.PathLike, argv: t.List[t.Union[str, bytes]],
-             *, envp: t.Optional[t.Dict[str, str]]=None) -> None:
-        self._can_syscall()
-        if envp is None:
-            envp = os.environ
-        self.pid = sfork_execveat(to_bytes(os.fspath(pathname)), [to_bytes(arg) for arg in argv],
-                                  serialize_environ(**envp), flags=0)
-        global current_process
-        current_process = self.parent_process
-
-class SuperviseContext:
-    pass
-
 # oh hey neato
 # this allows supervise to work with any existing Python process launching API.
 # that's pretty impressive!
@@ -474,8 +468,8 @@ class SuperviseContext:
 # but it will work fine.
 # hmm. when I spawn a process, obviously it spawns with supervise...
 # and that cleans it up...
-@contextmanager
-def supervise():
+# @contextmanager
+def supervise_context():
     context = SuperviseContext()
     parent_side, supervise_side = socket.socketpair(
         socket.AF_UNIX, socket.SOCK_SEQPACKET|os.O_CLOEXEC, 0)
@@ -511,7 +505,7 @@ def supervise():
         if context.pid is None:
             context.exit(0)
 
-@contextmanager
+# @contextmanager
 def cleanup_child_processes():
     """At the end of the context, kills absolutely all transitive child processes.
 
@@ -547,7 +541,7 @@ def cleanup_child_processes():
 # hmm, and we actually need to start supervise first to get the notifications.
 # so, that won't work.
 # we can't start things under supervise and get notifications for them at the same time.
-@contextmanager
+# @contextmanager
 def wait_on_child_processes():
     parent_side, supervise_side = socket.socketpair(
         socket.AF_UNIX, socket.SOCK_SEQPACKET|os.O_CLOEXEC, 0)
